@@ -70,28 +70,28 @@ var (
 	lb1Sig = "-" + label11 + "-" + value11 + "-" + label12 + "-" + value12
 	lb2Sig = "-" + label21 + "-" + value21 + "-" + label22 + "-" + value22
 
-	twoPointsSameTs = map[string]*prompb.TimeSeries{
+	twoPointsSameTs = map[uint64]*prompb.TimeSeries{
 		"Gauge" + "-" + label11 + "-" + value11 + "-" + label12 + "-" + value12: getTimeSeries(getPromLabels(label11, value11, label12, value12),
 			getSample(float64(intVal1), msTime1),
 			getSample(float64(intVal2), msTime2)),
 	}
-	twoPointsDifferentTs = map[string]*prompb.TimeSeries{
+	twoPointsDifferentTs = map[uint64]*prompb.TimeSeries{
 		"Gauge" + "-" + label11 + "-" + value11 + "-" + label12 + "-" + value12: getTimeSeries(getPromLabels(label11, value11, label12, value12),
 			getSample(float64(intVal1), msTime1)),
 		"Gauge" + "-" + label21 + "-" + value21 + "-" + label22 + "-" + value22: getTimeSeries(getPromLabels(label21, value21, label22, value22),
 			getSample(float64(intVal1), msTime2)),
 	}
-	tsWithSamplesAndExemplars = map[string]*prompb.TimeSeries{
+	tsWithSamplesAndExemplars = map[uint64]*prompb.TimeSeries{
 		lb1Sig: getTimeSeriesWithSamplesAndExemplars(getPromLabels(label11, value11, label12, value12),
 			[]prompb.Sample{getSample(float64(intVal1), msTime1)},
 			[]prompb.Exemplar{getExemplar(floatVal2, msTime1)}),
 	}
-	tsWithInfiniteBoundExemplarValue = map[string]*prompb.TimeSeries{
+	tsWithInfiniteBoundExemplarValue = map[uint64]*prompb.TimeSeries{
 		lb1Sig: getTimeSeriesWithSamplesAndExemplars(getPromLabels(label11, value11, label12, value12),
 			[]prompb.Sample{getSample(float64(intVal1), msTime1)},
 			[]prompb.Exemplar{getExemplar(math.MaxFloat64, msTime1)}),
 	}
-	tsWithoutSampleAndExemplar = map[string]*prompb.TimeSeries{
+	tsWithoutSampleAndExemplar = map[uint64]*prompb.TimeSeries{
 		lb1Sig: getTimeSeries(getPromLabels(label11, value11, label12, value12),
 			nil...),
 	}

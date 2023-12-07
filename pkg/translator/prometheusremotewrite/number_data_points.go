@@ -21,7 +21,7 @@ func addSingleGaugeNumberDataPoint(
 	resource pcommon.Resource,
 	metric pmetric.Metric,
 	settings Settings,
-	series map[string]*prompb.TimeSeries,
+	series map[uint64]*prompb.TimeSeries,
 	name string,
 ) {
 	labels := createAttributes(
@@ -55,7 +55,7 @@ func addSingleSumNumberDataPoint(
 	resource pcommon.Resource,
 	metric pmetric.Metric,
 	settings Settings,
-	series map[string]*prompb.TimeSeries,
+	series map[uint64]*prompb.TimeSeries,
 	name string,
 ) {
 	labels := createAttributes(
@@ -80,7 +80,7 @@ func addSingleSumNumberDataPoint(
 	}
 	sig := addSample(series, sample, labels, metric.Type().String())
 
-	if ts := series[sig]; sig != "" && ts != nil {
+	if ts := series[sig]; sig != 0 && ts != nil {
 		exemplars := getPromExemplars[pmetric.NumberDataPoint](pt)
 		ts.Exemplars = append(ts.Exemplars, exemplars...)
 	}

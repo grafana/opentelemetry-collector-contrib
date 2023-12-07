@@ -3,6 +3,7 @@ module github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/
 go 1.20
 
 require (
+	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal v0.90.1
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheus v0.90.1
 	github.com/prometheus/common v0.45.0

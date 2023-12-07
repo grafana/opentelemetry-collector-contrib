@@ -21,13 +21,11 @@ type Settings struct {
 	DisableTargetInfo   bool
 	ExportCreatedMetric bool
 	AddMetricSuffixes   bool
-	SendMetadata        bool
 }
 
 // FromMetrics converts pmetric.Metrics to Prometheus remote write format.
-func FromMetrics(md pmetric.Metrics, settings Settings) (tsMap map[string]*prompb.TimeSeries, errs error) {
-	tsMap = make(map[string]*prompb.TimeSeries)
-
+func FromMetrics(md pmetric.Metrics, settings Settings) (tsMap map[uint64]*prompb.TimeSeries, errs error) {
+	tsMap = make(map[uint64]*prompb.TimeSeries)
 	resourceMetricsSlice := md.ResourceMetrics()
 	for i := 0; i < resourceMetricsSlice.Len(); i++ {
 		resourceMetrics := resourceMetricsSlice.At(i)
@@ -37,8 +35,7 @@ func FromMetrics(md pmetric.Metrics, settings Settings) (tsMap map[string]*promp
 		// use with the "target" info metric
 		var mostRecentTimestamp pcommon.Timestamp
 		for j := 0; j < scopeMetricsSlice.Len(); j++ {
-			scopeMetrics := scopeMetricsSlice.At(j)
-			metricSlice := scopeMetrics.Metrics()
+			metricSlice := scopeMetricsSlice.At(j).Metrics()
 
 			// TODO: decide if instrumentation library information should be exported as labels
 			for k := 0; k < metricSlice.Len(); k++ {

@@ -10,10 +10,10 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/model/value"
@@ -46,7 +46,7 @@ const (
 )
 
 type bucketBoundsData struct {
-	sig   string
+	sig   uint64
 	bound float64
 }
 
@@ -67,11 +67,11 @@ func (a ByLabelName) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 // addSample finds a TimeSeries in tsMap that corresponds to the label set labels, and add sample to the TimeSeries; it
 // creates a new TimeSeries in the map if not found and returns the time series signature.
 // tsMap will be unmodified if either labels or sample is nil, but can still be modified if the exemplar is nil.
-func addSample(tsMap map[string]*prompb.TimeSeries, sample *prompb.Sample, labels []prompb.Label,
-	datatype string) string {
+func addSample(tsMap map[uint64]*prompb.TimeSeries, sample *prompb.Sample, labels []prompb.Label,
+	datatype string) uint64 {
 	if sample == nil || labels == nil || tsMap == nil {
 		// This shouldn't happen
-		return ""
+		return 0
 	}
 
 	sig := timeSeriesSignature(datatype, labels)
@@ -92,7 +92,7 @@ func addSample(tsMap map[string]*prompb.TimeSeries, sample *prompb.Sample, label
 // addExemplars finds a bucket bound that corresponds to the exemplars value and add the exemplar to the specific sig;
 // we only add exemplars if samples are presents
 // tsMap is unmodified if either of its parameters is nil and samples are nil.
-func addExemplars(tsMap map[string]*prompb.TimeSeries, exemplars []prompb.Exemplar, bucketBoundsData []bucketBoundsData) {
+func addExemplars(tsMap map[uint64]*prompb.TimeSeries, exemplars []prompb.Exemplar, bucketBoundsData []bucketBoundsData) {
 	if len(tsMap) == 0 || len(bucketBoundsData) == 0 || len(exemplars) == 0 {
 		return
 	}
@@ -104,7 +104,7 @@ func addExemplars(tsMap map[string]*prompb.TimeSeries, exemplars []prompb.Exempl
 	}
 }
 
-func addExemplar(tsMap map[string]*prompb.TimeSeries, bucketBounds []bucketBoundsData, exemplar prompb.Exemplar) {
+func addExemplar(tsMap map[uint64]*prompb.TimeSeries, bucketBounds []bucketBoundsData, exemplar prompb.Exemplar) {
 	for _, bucketBound := range bucketBounds {
 		sig := bucketBound.sig
 		bound := bucketBound.bound
@@ -123,28 +123,23 @@ func addExemplar(tsMap map[string]*prompb.TimeSeries, bucketBounds []bucketBound
 //
 // the label slice should not contain duplicate label names; this method sorts the slice by label name before creating
 // the signature.
-func timeSeriesSignature(datatype string, labels []prompb.Label) string {
-	length := len(datatype)
-
-	for _, lb := range labels {
-		length += 2 + len(lb.GetName()) + len(lb.GetValue())
-	}
-
-	b := strings.Builder{}
-	b.Grow(length)
-	b.WriteString(datatype)
-
+func timeSeriesSignature(datatype string, labels []prompb.Label) uint64 {
 	sort.Sort(ByLabelName(labels))
 
+	h := xxhash.New()
+	h.WriteString(datatype)
+	h.Write(seps)
 	for _, lb := range labels {
-		b.WriteString("-")
-		b.WriteString(lb.GetName())
-		b.WriteString("-")
-		b.WriteString(lb.GetValue())
+		h.WriteString(lb.GetName())
+		h.Write(seps)
+		h.WriteString(lb.GetValue())
+		h.Write(seps)
 	}
 
-	return b.String()
+	return h.Sum64()
 }
+
+var seps = []byte{'\xff'}
 
 // createAttributes creates a slice of Prometheus Labels with OTLP attributes and pairs of string values.
 // Unpaired string values are ignored. String pairs overwrite OTLP labels if collisions happen, and overwrites are
@@ -249,7 +244,7 @@ func isValidAggregationTemporality(metric pmetric.Metric) bool {
 
 // addSingleHistogramDataPoint converts pt to 2 + min(len(ExplicitBounds), len(BucketCount)) + 1 samples. It
 // ignore extra buckets if len(ExplicitBounds) > len(BucketCounts)
-func addSingleHistogramDataPoint(pt pmetric.HistogramDataPoint, resource pcommon.Resource, metric pmetric.Metric, settings Settings, tsMap map[string]*prompb.TimeSeries, baseName string) {
+func addSingleHistogramDataPoint(pt pmetric.HistogramDataPoint, resource pcommon.Resource, metric pmetric.Metric, settings Settings, tsMap map[uint64]*prompb.TimeSeries, baseName string) {
 	timestamp := convertTimeStamp(pt.Timestamp())
 	baseLabels := createAttributes(resource, pt.Attributes(), settings.ExternalLabels)
 
@@ -448,7 +443,7 @@ func maxTimestamp(a, b pcommon.Timestamp) pcommon.Timestamp {
 
 // addSingleSummaryDataPoint converts pt to len(QuantileValues) + 2 samples.
 func addSingleSummaryDataPoint(pt pmetric.SummaryDataPoint, resource pcommon.Resource, metric pmetric.Metric, settings Settings,
-	tsMap map[string]*prompb.TimeSeries, baseName string) {
+	tsMap map[uint64]*prompb.TimeSeries, baseName string) {
 	timestamp := convertTimeStamp(pt.Timestamp())
 	baseLabels := createAttributes(resource, pt.Attributes(), settings.ExternalLabels)
 
@@ -515,7 +510,7 @@ func addSingleSummaryDataPoint(pt pmetric.SummaryDataPoint, resource pcommon.Res
 // addCreatedTimeSeriesIfNeeded adds {name}_created time series with a single
 // sample. If the series exists, then new samples won't be added.
 func addCreatedTimeSeriesIfNeeded(
-	series map[string]*prompb.TimeSeries,
+	series map[uint64]*prompb.TimeSeries,
 	labels []prompb.Label,
 	startTimestamp pcommon.Timestamp,
 	timestamp pcommon.Timestamp,
@@ -536,7 +531,7 @@ func addCreatedTimeSeriesIfNeeded(
 }
 
 // addResourceTargetInfo converts the resource to the target info metric
-func addResourceTargetInfo(resource pcommon.Resource, settings Settings, timestamp pcommon.Timestamp, tsMap map[string]*prompb.TimeSeries) {
+func addResourceTargetInfo(resource pcommon.Resource, settings Settings, timestamp pcommon.Timestamp, tsMap map[uint64]*prompb.TimeSeries) {
 	if settings.DisableTargetInfo {
 		return
 	}

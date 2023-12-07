@@ -115,13 +115,13 @@ func Test_addSample(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		orig     map[string]*prompb.TimeSeries
+		orig     map[uint64]*prompb.TimeSeries
 		testCase []testCase
-		want     map[string]*prompb.TimeSeries
+		want     map[uint64]*prompb.TimeSeries
 	}{
 		{
 			"two_points_same_ts_same_metric",
-			map[string]*prompb.TimeSeries{},
+			map[uint64]*prompb.TimeSeries{},
 			[]testCase{
 				{validMetrics1[validDoubleGauge],
 					getSample(floatVal1, msTime1),
@@ -137,7 +137,7 @@ func Test_addSample(t *testing.T) {
 		},
 		{
 			"two_points_different_ts_same_metric",
-			map[string]*prompb.TimeSeries{},
+			map[uint64]*prompb.TimeSeries{},
 			[]testCase{
 				{validMetrics1[validIntGauge],
 					getSample(float64(intVal1), msTime1),
@@ -152,9 +152,9 @@ func Test_addSample(t *testing.T) {
 		},
 	}
 	t.Run("empty_case", func(t *testing.T) {
-		tsMap := map[string]*prompb.TimeSeries{}
+		tsMap := map[uint64]*prompb.TimeSeries{}
 		addSample(tsMap, nil, nil, "")
-		assert.Exactly(t, tsMap, map[string]*prompb.TimeSeries{})
+		assert.Exactly(t, tsMap, map[uint64]*prompb.TimeSeries{})
 	})
 	// run tests
 	for _, tt := range tests {
@@ -362,20 +362,20 @@ func Test_addExemplars(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		orig     map[string]*prompb.TimeSeries
+		orig     map[uint64]*prompb.TimeSeries
 		testCase []testCase
-		want     map[string]*prompb.TimeSeries
+		want     map[uint64]*prompb.TimeSeries
 	}{
 		{
 			"timeSeries_is_empty",
-			map[string]*prompb.TimeSeries{},
+			map[uint64]*prompb.TimeSeries{},
 			[]testCase{
 				{
 					[]prompb.Exemplar{getExemplar(float64(intVal1), msTime1)},
 					getBucketBoundsData([]float64{1, 2, 3}),
 				},
 			},
-			map[string]*prompb.TimeSeries{},
+			map[uint64]*prompb.TimeSeries{},
 		},
 		{
 			"timeSeries_without_sample",
@@ -390,7 +390,7 @@ func Test_addExemplars(t *testing.T) {
 		},
 		{
 			"exemplar_value_less_than_bucket_bound",
-			map[string]*prompb.TimeSeries{
+			map[uint64]*prompb.TimeSeries{
 				lb1Sig: getTimeSeries(getPromLabels(label11, value11, label12, value12),
 					getSample(float64(intVal1), msTime1)),
 			},
@@ -404,7 +404,7 @@ func Test_addExemplars(t *testing.T) {
 		},
 		{
 			"infinite_bucket_bound",
-			map[string]*prompb.TimeSeries{
+			map[uint64]*prompb.TimeSeries{
 				lb1Sig: getTimeSeries(getPromLabels(label11, value11, label12, value12),
 					getSample(float64(intVal1), msTime1)),
 			},
@@ -519,24 +519,24 @@ func TestAddResourceTargetInfo(t *testing.T) {
 		resource  pcommon.Resource
 		settings  Settings
 		timestamp pcommon.Timestamp
-		expected  map[string]*prompb.TimeSeries
+		expected  map[uint64]*prompb.TimeSeries
 	}{
 		{
 			desc:     "empty resource",
 			resource: pcommon.NewResource(),
-			expected: map[string]*prompb.TimeSeries{},
+			expected: map[uint64]*prompb.TimeSeries{},
 		},
 		{
 			desc:     "disable target info metric",
 			resource: testdata.GenerateMetricsNoLibraries().ResourceMetrics().At(0).Resource(),
 			settings: Settings{DisableTargetInfo: true},
-			expected: map[string]*prompb.TimeSeries{},
+			expected: map[uint64]*prompb.TimeSeries{},
 		},
 		{
 			desc:      "with resource",
 			resource:  testdata.GenerateMetricsNoLibraries().ResourceMetrics().At(0).Resource(),
 			timestamp: testdata.TestMetricStartTimestamp,
-			expected: map[string]*prompb.TimeSeries{
+			expected: map[uint64]*prompb.TimeSeries{
 				"info-__name__-target_info-resource_attr-resource-attr-val-1": {
 					Labels: []prompb.Label{
 						{
@@ -562,7 +562,7 @@ func TestAddResourceTargetInfo(t *testing.T) {
 			resource:  testdata.GenerateMetricsNoLibraries().ResourceMetrics().At(0).Resource(),
 			timestamp: testdata.TestMetricStartTimestamp,
 			settings:  Settings{Namespace: "foo"},
-			expected: map[string]*prompb.TimeSeries{
+			expected: map[uint64]*prompb.TimeSeries{
 				"info-__name__-foo_target_info-resource_attr-resource-attr-val-1": {
 					Labels: []prompb.Label{
 						{
@@ -587,7 +587,7 @@ func TestAddResourceTargetInfo(t *testing.T) {
 			desc:      "with resource, with service attributes",
 			resource:  resourceWithServiceAttrs,
 			timestamp: testdata.TestMetricStartTimestamp,
-			expected: map[string]*prompb.TimeSeries{
+			expected: map[uint64]*prompb.TimeSeries{
 				"info-__name__-target_info-instance-service-instance-id-job-service-namespace/service-name-resource_attr-resource-attr-val-1": {
 					Labels: []prompb.Label{
 						{
@@ -620,11 +620,11 @@ func TestAddResourceTargetInfo(t *testing.T) {
 			desc:      "with resource, with only service attributes",
 			resource:  resourceWithOnlyServiceAttrs,
 			timestamp: testdata.TestMetricStartTimestamp,
-			expected:  map[string]*prompb.TimeSeries{},
+			expected:  map[uint64]*prompb.TimeSeries{},
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tsMap := map[string]*prompb.TimeSeries{}
+			tsMap := map[uint64]*prompb.TimeSeries{}
 			addResourceTargetInfo(tc.resource, tc.settings, tc.timestamp, tsMap)
 			assert.Exactly(t, tc.expected, tsMap)
 		})
@@ -664,7 +664,7 @@ func TestAddSingleSummaryDataPoint(t *testing.T) {
 	tests := []struct {
 		name   string
 		metric func() pmetric.Metric
-		want   func() map[string]*prompb.TimeSeries
+		want   func() map[uint64]*prompb.TimeSeries
 	}{
 		{
 			name: "summary with start time",
@@ -679,7 +679,7 @@ func TestAddSingleSummaryDataPoint(t *testing.T) {
 
 				return metric
 			},
-			want: func() map[string]*prompb.TimeSeries {
+			want: func() map[uint64]*prompb.TimeSeries {
 				labels := []prompb.Label{
 					{Name: model.MetricNameLabel, Value: "test_summary" + countStr},
 				}
@@ -689,7 +689,7 @@ func TestAddSingleSummaryDataPoint(t *testing.T) {
 				sumLabels := []prompb.Label{
 					{Name: model.MetricNameLabel, Value: "test_summary" + sumStr},
 				}
-				return map[string]*prompb.TimeSeries{
+				return map[uint64]*prompb.TimeSeries{
 					timeSeriesSignature(pmetric.MetricTypeSummary.String(), labels): {
 						Labels: labels,
 						Samples: []prompb.Sample{
@@ -723,14 +723,14 @@ func TestAddSingleSummaryDataPoint(t *testing.T) {
 
 				return metric
 			},
-			want: func() map[string]*prompb.TimeSeries {
+			want: func() map[uint64]*prompb.TimeSeries {
 				labels := []prompb.Label{
 					{Name: model.MetricNameLabel, Value: "test_summary" + countStr},
 				}
 				sumLabels := []prompb.Label{
 					{Name: model.MetricNameLabel, Value: "test_summary" + sumStr},
 				}
-				return map[string]*prompb.TimeSeries{
+				return map[uint64]*prompb.TimeSeries{
 					timeSeriesSignature(pmetric.MetricTypeSummary.String(), labels): {
 						Labels: labels,
 						Samples: []prompb.Sample{
@@ -751,7 +751,7 @@ func TestAddSingleSummaryDataPoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			metric := tt.metric()
 
-			got := make(map[string]*prompb.TimeSeries)
+			got := make(map[uint64]*prompb.TimeSeries)
 			for x := 0; x < metric.Summary().DataPoints().Len(); x++ {
 				addSingleSummaryDataPoint(
 					metric.Summary().DataPoints().At(x),
@@ -774,7 +774,7 @@ func TestAddSingleHistogramDataPoint(t *testing.T) {
 	tests := []struct {
 		name   string
 		metric func() pmetric.Metric
-		want   func() map[string]*prompb.TimeSeries
+		want   func() map[uint64]*prompb.TimeSeries
 	}{
 		{
 			name: "histogram with start time",
@@ -789,7 +789,7 @@ func TestAddSingleHistogramDataPoint(t *testing.T) {
 
 				return metric
 			},
-			want: func() map[string]*prompb.TimeSeries {
+			want: func() map[uint64]*prompb.TimeSeries {
 				labels := []prompb.Label{
 					{Name: model.MetricNameLabel, Value: "test_hist" + countStr},
 				}
@@ -800,7 +800,7 @@ func TestAddSingleHistogramDataPoint(t *testing.T) {
 					{Name: model.MetricNameLabel, Value: "test_hist_bucket"},
 					{Name: model.BucketLabel, Value: "+Inf"},
 				}
-				return map[string]*prompb.TimeSeries{
+				return map[uint64]*prompb.TimeSeries{
 					timeSeriesSignature(pmetric.MetricTypeHistogram.String(), infLabels): {
 						Labels: infLabels,
 						Samples: []prompb.Sample{
@@ -834,7 +834,7 @@ func TestAddSingleHistogramDataPoint(t *testing.T) {
 
 				return metric
 			},
-			want: func() map[string]*prompb.TimeSeries {
+			want: func() map[uint64]*prompb.TimeSeries {
 				labels := []prompb.Label{
 					{Name: model.MetricNameLabel, Value: "test_hist" + countStr},
 				}
@@ -842,7 +842,7 @@ func TestAddSingleHistogramDataPoint(t *testing.T) {
 					{Name: model.MetricNameLabel, Value: "test_hist_bucket"},
 					{Name: model.BucketLabel, Value: "+Inf"},
 				}
-				return map[string]*prompb.TimeSeries{
+				return map[uint64]*prompb.TimeSeries{
 					timeSeriesSignature(pmetric.MetricTypeHistogram.String(), infLabels): {
 						Labels: infLabels,
 						Samples: []prompb.Sample{
@@ -863,7 +863,7 @@ func TestAddSingleHistogramDataPoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			metric := tt.metric()
 
-			got := make(map[string]*prompb.TimeSeries)
+			got := make(map[uint64]*prompb.TimeSeries)
 			for x := 0; x < metric.Histogram().DataPoints().Len(); x++ {
 				addSingleHistogramDataPoint(
 					metric.Histogram().DataPoints().At(x),
