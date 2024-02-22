@@ -534,7 +534,7 @@ func (gar *githubActionsReceiver) Start(ctx context.Context, host component.Host
 	go func() {
 		defer gar.shutdownWG.Done()
 		if err := gar.server.ListenAndServe(); err != http.ErrServerClosed {
-			host.ReportFatalError(err)
+			gar.createSettings.TelemetrySettings.ReportStatus(component.NewFatalErrorEvent(err))
 		}
 	}()
 
