@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubactionsreceiver/internal/metadata"
 )
 
@@ -49,5 +50,37 @@ func createTracesReceiver(
 	nextConsumer consumer.Traces,
 ) (receiver.Traces, error) {
 	rCfg := cfg.(*Config)
-	return newTracesReceiver(set, rCfg, nextConsumer)
+
+	r := receivers.GetOrAdd(cfg, func() component.Component {
+		return newReceiver(set, rCfg)
+	})
+
+	if err := r.Unwrap().(*githubActionsReceiver).registerTracesConsumer(nextConsumer); err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
+
+// createTracesReceiver creates a trace receiver based on provided config.
+func createLogsReceiver(
+	_ context.Context,
+	set receiver.CreateSettings,
+	cfg component.Config,
+	nextConsumer consumer.Logs,
+) (receiver.Traces, error) {
+	rCfg := cfg.(*Config)
+
+	r := receivers.GetOrAdd(cfg, func() component.Component {
+		return newReceiver(set, rCfg)
+	})
+
+	if err := r.Unwrap().(*githubActionsReceiver).registerLogsConsumer(nextConsumer); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+// the receiver is able to handle all types of data, we only create one instance per ID
+var receivers = sharedcomponent.NewSharedComponents()

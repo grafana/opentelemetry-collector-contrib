@@ -38,6 +38,8 @@ type githubActionsReceiver struct {
 	logger          *zap.Logger
 	jsonUnmarshaler *jsonTracesUnmarshaler
 	obsrecv         *receiverhelper.ObsReport
+	logsConsumer    consumer.Logs
+	tracesConsumer  consumer.Traces
 }
 
 type jsonTracesUnmarshaler struct {
@@ -480,36 +482,52 @@ func validateSignatureSHA1(secret string, signatureHeader string, body []byte, l
 	return hmac.Equal([]byte(expectedSig), []byte(receivedSig))
 }
 
-func newTracesReceiver(
-	params receiver.CreateSettings,
-	config *Config,
-	nextConsumer consumer.Traces,
-) (*githubActionsReceiver, error) {
-	if nextConsumer == nil {
-		return nil, component.ErrNilNextConsumer
+func (r *githubActionsReceiver) registerTracesConsumer(tc consumer.Traces) error {
+	r.tracesConsumer = tc
+	if tc == nil {
+		return component.ErrNilNextConsumer
 	}
 
-	if config.Endpoint == "" {
-		return nil, errMissingEndpoint
+	return nil
+}
+
+func (r *githubActionsReceiver) registerLogsConsumer(lc consumer.Logs) error {
+	r.logsConsumer = lc
+	if lc == nil {
+		return component.ErrNilNextConsumer
 	}
+
+	return nil
+}
+
+func newReceiver(
+	params receiver.CreateSettings,
+	config *Config,
+) *githubActionsReceiver {
+	// if nextConsumer == nil {
+	// 	return nil, component.ErrNilNextConsumer
+	// }
+
+	// if config.Endpoint == "" {
+	// 	return nil, errMissingEndpoint
+	// }
 
 	transport := "http"
 	if config.TLSSetting != nil {
 		transport = "https"
 	}
 
-	obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
+	obsrecv, _ := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
 		ReceiverID:             params.ID,
 		Transport:              transport,
 		ReceiverCreateSettings: params,
 	})
 
-	if err != nil {
-		return nil, err
-	}
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	gar := &githubActionsReceiver{
-		nextConsumer:   nextConsumer,
 		config:         config,
 		createSettings: params,
 		logger:         params.Logger,
@@ -519,12 +537,12 @@ func newTracesReceiver(
 		obsrecv: obsrecv,
 	}
 
-	return gar, nil
+	return gar
 }
 
 func (gar *githubActionsReceiver) Start(ctx context.Context, host component.Host) error {
-	endpint := fmt.Sprintf("%s%s", gar.config.Endpoint, gar.config.Path)
-	gar.logger.Info("Starting GithubActions server", zap.String("endpoint", endpint))
+	endpoint := fmt.Sprintf("%s%s", gar.config.Endpoint, gar.config.Path)
+	gar.logger.Info("Starting GithubActions server", zap.String("endpoint", endpoint))
 	gar.server = &http.Server{
 		Addr:    gar.config.HTTPServerSettings.Endpoint,
 		Handler: gar,
@@ -600,7 +618,7 @@ func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	gar.logger.Info("Unmarshaled spans", zap.Int("#spans", td.SpanCount()))
 
 	// Pass the traces to the nextConsumer
-	consumerErr := gar.nextConsumer.ConsumeTraces(ctx, td)
+	consumerErr := gar.tracesConsumer.ConsumeTraces(ctx, td)
 	if consumerErr != nil {
 		gar.logger.Error("Failed to process traces", zap.Error(consumerErr))
 		http.Error(w, "Failed to process traces", http.StatusInternalServerError)
