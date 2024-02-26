@@ -3,6 +3,7 @@ module github.com/open-telemetry/opentelemetry-collector-contrib/receiver/github
 go 1.20
 
 require (
+	github.com/google/go-github/v58 v58.0.0
 	github.com/stretchr/testify v1.8.4
 	go.opentelemetry.io/collector/component v0.86.0
 	go.opentelemetry.io/collector/config/confighttp v0.86.0
