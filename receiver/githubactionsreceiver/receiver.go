@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +56,7 @@ func (j *jsonTracesUnmarshaler) UnmarshalTraces(blob []byte, config *Config) (pt
 
 	var traces ptrace.Traces
 	if _, ok := event["workflow_job"]; ok {
-		j.logger.Info("Unmarshalling WorkflowJobEvent")
+		j.logger.Debug("Unmarshalling WorkflowJobEvent")
 		var jobEvent github.WorkflowJobEvent
 		err := json.Unmarshal(blob, &jobEvent)
 
@@ -73,7 +74,7 @@ func (j *jsonTracesUnmarshaler) UnmarshalTraces(blob []byte, config *Config) (pt
 			return ptrace.Traces{}, err
 		}
 	} else if _, ok := event["workflow_run"]; ok {
-		j.logger.Info("Unmarshalling WorkflowRunEvent")
+		j.logger.Debug("Unmarshalling WorkflowRunEvent")
 		var runEvent github.WorkflowRunEvent
 		err := json.Unmarshal(blob, &runEvent)
 
@@ -99,14 +100,14 @@ func (j *jsonTracesUnmarshaler) UnmarshalTraces(blob []byte, config *Config) (pt
 }
 
 func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrace.Traces, error) {
-	logger.Info("Determining event")
+	logger.Debug("Determining event")
 	traces := ptrace.NewTraces()
 	resourceSpans := traces.ResourceSpans().AppendEmpty()
 	scopeSpans := resourceSpans.ScopeSpans().AppendEmpty()
 
 	switch e := event.(type) {
 	case *github.WorkflowJobEvent:
-		logger.Info("Processing WorkflowJobEvent")
+		logger.Info("Processing WorkflowJobEvent", zap.String("job_name", *e.WorkflowJob.Name), zap.String("repo", *e.Repo.FullName))
 		jobResource := resourceSpans.Resource()
 		createResourceAttributes(jobResource, e, config, logger)
 		traceID, err := generateTraceID(*e.WorkflowJob.RunID, *e.WorkflowJob.RunAttempt)
@@ -120,7 +121,7 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 		processSteps(scopeSpans, e.WorkflowJob.Steps, *e.WorkflowJob, traceID, parentSpanID, logger)
 
 	case *github.WorkflowRunEvent:
-		logger.Info("Processing WorkflowRunEvent")
+		logger.Info("Processing WorkflowRunEvent", zap.String("workflow_name", *e.WorkflowRun.Name), zap.String("repo", *e.Repo.FullName))
 		runResource := resourceSpans.Resource()
 		traceID, err := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
 
@@ -141,7 +142,7 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 }
 
 func createParentSpan(scopeSpans ptrace.ScopeSpans, steps []*github.TaskStep, job *github.WorkflowJob, traceID pcommon.TraceID, logger *zap.Logger) pcommon.SpanID {
-	logger.Info("Creating parent span", zap.String("name", *job.Name))
+	logger.Debug("Creating parent span", zap.String("name", *job.Name))
 	span := scopeSpans.Spans().AppendEmpty()
 	span.SetTraceID(traceID)
 
@@ -202,6 +203,17 @@ func createResourceAttributes(resource pcommon.Resource, event interface{}, conf
 		attrs.PutStr("ci.github.workflow.job.head_sha", *e.WorkflowJob.HeadSHA)
 		attrs.PutStr("ci.github.workflow.job.html_url", *e.WorkflowJob.HTMLURL)
 		attrs.PutInt("ci.github.workflow.job.id", *e.WorkflowJob.ID)
+		if len(e.WorkflowJob.Labels) > 0 {
+			for i, label := range e.WorkflowJob.Labels {
+				e.WorkflowJob.Labels[i] = strings.ToLower(label)
+			}
+			sort.Strings(e.WorkflowJob.Labels)
+			joinedLabels := strings.Join(e.WorkflowJob.Labels, ",")
+			attrs.PutStr("ci.github.workflow.job.labels", joinedLabels)
+		} else {
+			attrs.PutStr("ci.github.workflow.job.labels", "no labels")
+		}
+
 		attrs.PutStr("ci.github.workflow.job.labels", e.WorkflowJob.Labels[0])
 		attrs.PutStr("ci.github.workflow.job.name", *e.WorkflowJob.Name)
 		attrs.PutInt("ci.github.workflow.job.run_attempt", int64(*e.WorkflowJob.RunAttempt))
@@ -234,7 +246,8 @@ func createResourceAttributes(resource pcommon.Resource, event interface{}, conf
 		attrs.PutStr("ci.github.workflow.run.name", *e.WorkflowRun.Name)
 		// attrs.PutStr("ci.github.workflow.run.path", *e.WorkflowRun.Path)
 		if *e.WorkflowRun.PreviousAttemptURL != "" {
-			attrs.PutStr("ci.github.workflow.run.previous_attempt_url", *e.WorkflowRun.PreviousAttemptURL)
+			htmlURL := transformGitHubAPIURL(*e.WorkflowRun.PreviousAttemptURL)
+			attrs.PutStr("ci.github.workflow.run.previous_attempt_url", htmlURL)
 		}
 		attrs.PutInt("ci.github.workflow.run.run_attempt", int64(*e.WorkflowRun.RunAttempt))
 		attrs.PutStr("ci.github.workflow.run.run_started_at", e.WorkflowRun.RunStartedAt.Format(time.RFC3339))
@@ -288,7 +301,7 @@ func convertPRURL(apiURL string) string {
 }
 
 func createRootSpan(resourceSpans ptrace.ResourceSpans, event *github.WorkflowRunEvent, traceID pcommon.TraceID, logger *zap.Logger) (pcommon.SpanID, error) {
-	logger.Info("Creating root parent span", zap.String("name", *event.WorkflowRun.Name))
+	logger.Debug("Creating root parent span", zap.String("name", *event.WorkflowRun.Name))
 	scopeSpans := resourceSpans.ScopeSpans().AppendEmpty()
 	span := scopeSpans.Spans().AppendEmpty()
 
@@ -333,7 +346,7 @@ func createRootSpan(resourceSpans ptrace.ResourceSpans, event *github.WorkflowRu
 }
 
 func createSpan(scopeSpans ptrace.ScopeSpans, step github.TaskStep, job github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger, stepNumber ...int) pcommon.SpanID {
-	logger.Info("Processing span", zap.String("step_name", *step.Name))
+	logger.Debug("Processing span", zap.String("step_name", *step.Name))
 	span := scopeSpans.Spans().AppendEmpty()
 	span.SetTraceID(traceID)
 	span.SetParentSpanID(parentSpanID)
@@ -458,6 +471,11 @@ func setSpanTimes(span ptrace.Span, start, end github.Timestamp) {
 	span.SetEndTimestamp(pcommon.NewTimestampFromTime(end.Time))
 }
 
+func transformGitHubAPIURL(apiURL string) string {
+	htmlURL := strings.Replace(apiURL, "api.github.com/repos", "github.com", 1)
+	return htmlURL
+}
+
 func validateSignatureSHA256(secret string, signatureHeader string, body []byte, logger *zap.Logger) bool {
 	if signatureHeader == "" || len(signatureHeader) < 7 {
 		logger.Debug("Unauthorized - No Signature Header")
@@ -468,7 +486,7 @@ func validateSignatureSHA256(secret string, signatureHeader string, body []byte,
 	computedHash.Write(body)
 	expectedSig := hex.EncodeToString(computedHash.Sum(nil))
 
-	logger.Info("Debugging Signatures", zap.String("Received", receivedSig), zap.String("Computed", expectedSig))
+	logger.Debug("Debugging Signatures", zap.String("Received", receivedSig), zap.String("Computed", expectedSig))
 
 	return hmac.Equal([]byte(expectedSig), []byte(receivedSig))
 }
@@ -483,7 +501,7 @@ func validateSignatureSHA1(secret string, signatureHeader string, body []byte, l
 	computedHash.Write(body)
 	expectedSig := hex.EncodeToString(computedHash.Sum(nil))
 
-	logger.Info("Debugging Signatures", zap.String("Received", receivedSig), zap.String("Computed", expectedSig))
+	logger.Debug("Debugging Signatures", zap.String("Received", receivedSig), zap.String("Computed", expectedSig))
 
 	return hmac.Equal([]byte(expectedSig), []byte(receivedSig))
 }
@@ -639,7 +657,7 @@ func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	// 	fmt.Println("extracting file ", f.Name)
 	// }
 
-	gar.logger.Info("Unmarshaled spans", zap.Int("#spans", td.SpanCount()))
+	gar.logger.Debug("Unmarshaled spans", zap.Int("#spans", td.SpanCount()))
 
 	// Pass the traces to the nextConsumer
 	consumerErr := gar.tracesConsumer.ConsumeTraces(ctx, td)
