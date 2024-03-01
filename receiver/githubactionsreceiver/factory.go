@@ -28,6 +28,7 @@ func NewFactory() receiver.Factory {
 		metadata.Type,
 		createDefaultConfig,
 		receiver.WithTraces(createTracesReceiver, metadata.TracesStability),
+		receiver.WithLogs(createLogsReceiver, metadata.LogsStability),
 	)
 }
 
@@ -62,13 +63,13 @@ func createTracesReceiver(
 	return r, nil
 }
 
-// createTracesReceiver creates a trace receiver based on provided config.
+// createLogsReceiver creates a logs receiver based on provided config.
 func createLogsReceiver(
 	_ context.Context,
 	set receiver.CreateSettings,
 	cfg component.Config,
 	nextConsumer consumer.Logs,
-) (receiver.Traces, error) {
+) (receiver.Logs, error) {
 	rCfg := cfg.(*Config)
 
 	r := receivers.GetOrAdd(cfg, func() component.Component {

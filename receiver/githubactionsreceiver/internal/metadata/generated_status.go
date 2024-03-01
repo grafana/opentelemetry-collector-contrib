@@ -9,4 +9,5 @@ import (
 const (
 	Type          	 = "githubactions"
 	TracesStability  = component.StabilityLevelAlpha
+	LogsStability    = component.StabilityLevelAlpha
 )

@@ -4,6 +4,8 @@
 package githubactionsreceiver
 
 import (
+	"archive/zip"
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -13,7 +15,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +27,7 @@ import (
 
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
@@ -30,113 +35,54 @@ import (
 )
 
 type githubActionsReceiver struct {
-	config          *Config
-	server          *http.Server
-	shutdownWG      sync.WaitGroup
-	createSettings  receiver.CreateSettings
-	logger          *zap.Logger
-	jsonUnmarshaler *jsonTracesUnmarshaler
-	obsrecv         *receiverhelper.ObsReport
-	ghClient        *github.Client
+	config         *Config
+	server         *http.Server
+	shutdownWG     sync.WaitGroup
+	createSettings receiver.CreateSettings
+	logger         *zap.Logger
+	obsrecv        *receiverhelper.ObsReport
+	ghClient       *github.Client
 
 	logsConsumer   consumer.Logs
 	tracesConsumer consumer.Traces
 }
 
-type jsonTracesUnmarshaler struct {
-	logger *zap.Logger
-}
-
-func (j *jsonTracesUnmarshaler) UnmarshalTraces(blob []byte, config *Config) (ptrace.Traces, error) {
-	var event map[string]json.RawMessage
-	if err := json.Unmarshal(blob, &event); err != nil {
-		j.logger.Error("Failed to unmarshal blob", zap.Error(err))
-		return ptrace.Traces{}, err
-	}
-
-	var traces ptrace.Traces
-	if _, ok := event["workflow_job"]; ok {
-		j.logger.Debug("Unmarshalling WorkflowJobEvent")
-		var jobEvent github.WorkflowJobEvent
-		err := json.Unmarshal(blob, &jobEvent)
-
-		if err != nil {
-			j.logger.Error("Failed to unmarshal job event", zap.Error(err))
-			return ptrace.Traces{}, err
-		}
-		if *jobEvent.WorkflowJob.Status != "completed" {
-			return ptrace.Traces{}, nil
-		}
-
-		traces, err = eventToTraces(&jobEvent, config, j.logger)
-		if err != nil {
-			j.logger.Error("Failed to convert event to traces", zap.Error(err))
-			return ptrace.Traces{}, err
-		}
-	} else if _, ok := event["workflow_run"]; ok {
-		j.logger.Debug("Unmarshalling WorkflowRunEvent")
-		var runEvent github.WorkflowRunEvent
-		err := json.Unmarshal(blob, &runEvent)
-
-		if err != nil {
-			j.logger.Error("Failed to unmarshal run event", zap.Error(err))
-			return ptrace.Traces{}, err
-		}
-		if *runEvent.WorkflowRun.Status != "completed" {
-			return ptrace.Traces{}, nil
-		}
-
-		traces, err = eventToTraces(&runEvent, config, j.logger)
-		if err != nil {
-			j.logger.Error("Failed to convert event to traces", zap.Error(err))
-			return ptrace.Traces{}, err
-		}
-	} else {
-		j.logger.Warn("Unknown event type")
-		return ptrace.Traces{}, fmt.Errorf("unknown event type: %v", event)
-	}
-
-	return traces, nil
-}
-
-func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrace.Traces, error) {
-	logger.Debug("Determining event")
+func processWorflowJobEvent(event *github.WorkflowJobEvent, config *Config, logger *zap.Logger) (ptrace.Traces, error) {
 	traces := ptrace.NewTraces()
 	resourceSpans := traces.ResourceSpans().AppendEmpty()
 	scopeSpans := resourceSpans.ScopeSpans().AppendEmpty()
 
-	switch e := event.(type) {
-	case *github.WorkflowJobEvent:
-		logger.Info("Processing WorkflowJobEvent", zap.String("job_name", *e.WorkflowJob.Name), zap.String("repo", *e.Repo.FullName))
-		jobResource := resourceSpans.Resource()
-		createResourceAttributes(jobResource, e, config, logger)
-		traceID, err := generateTraceID(*e.WorkflowJob.RunID, *e.WorkflowJob.RunAttempt)
+	logger.Info("Processing WorkflowJobEvent", zap.String("job_name", *event.WorkflowJob.Name), zap.String("repo", *event.Repo.FullName))
+	jobResource := resourceSpans.Resource()
+	createResourceAttributes(jobResource, event, config, logger)
+	traceID, err := generateTraceID(*event.WorkflowJob.RunID, *event.WorkflowJob.RunAttempt)
 
-		if err != nil {
-			logger.Error("Failed to generate trace ID", zap.Error(err))
-			return traces, fmt.Errorf("failed to generate trace ID")
-		}
-
-		parentSpanID := createParentSpan(scopeSpans, e.WorkflowJob.Steps, e.WorkflowJob, traceID, logger)
-		processSteps(scopeSpans, e.WorkflowJob.Steps, *e.WorkflowJob, traceID, parentSpanID, logger)
-
-	case *github.WorkflowRunEvent:
-		logger.Info("Processing WorkflowRunEvent", zap.String("workflow_name", *e.WorkflowRun.Name), zap.String("repo", *e.Repo.FullName))
-		runResource := resourceSpans.Resource()
-		traceID, err := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
-
-		if err != nil {
-			logger.Error("Failed to generate trace ID", zap.Error(err))
-			return traces, fmt.Errorf("failed to generate trace ID")
-		}
-
-		createResourceAttributes(runResource, e, config, logger)
-		createRootSpan(resourceSpans, e, traceID, logger)
-
-	default:
-		logger.Error("unknown event type, dropping payload")
-		return ptrace.Traces{}, fmt.Errorf("unknown event type %T", e)
+	if err != nil {
+		logger.Error("Failed to generate trace ID", zap.Error(err))
+		return traces, fmt.Errorf("failed to generate trace ID")
 	}
+
+	parentSpanID := createParentSpan(scopeSpans, event.WorkflowJob.Steps, event.WorkflowJob, traceID, logger)
+	processSteps(scopeSpans, event.WorkflowJob.Steps, *event.WorkflowJob, traceID, parentSpanID, logger)
+
+	return traces, nil
+}
+
+func processWorflowRunEvent(event *github.WorkflowRunEvent, config *Config, logger *zap.Logger) (ptrace.Traces, error) {
+	traces := ptrace.NewTraces()
+	resourceSpans := traces.ResourceSpans().AppendEmpty()
+
+	logger.Info("Processing WorkflowRunEvent", zap.String("workflow_name", *event.WorkflowRun.Name), zap.String("repo", *event.Repo.FullName))
+	runResource := resourceSpans.Resource()
+	traceID, err := generateTraceID(*event.WorkflowRun.ID, int64(*event.WorkflowRun.RunAttempt))
+
+	if err != nil {
+		logger.Error("Failed to generate trace ID", zap.Error(err))
+		return traces, fmt.Errorf("failed to generate trace ID")
+	}
+
+	createResourceAttributes(runResource, event, config, logger)
+	createRootSpan(resourceSpans, event, traceID, logger)
 
 	return traces, nil
 }
@@ -539,20 +485,14 @@ func newReceiver(
 		ReceiverCreateSettings: params,
 	})
 
-	client := github.NewClient(nil)
-	if config.Token != "" {
-		client = client.WithAuthToken(config.Token)
-	}
+	client := github.NewClient(nil).WithAuthToken(config.Token)
 
 	gar := &githubActionsReceiver{
 		config:         config,
 		createSettings: params,
 		logger:         params.Logger,
-		jsonUnmarshaler: &jsonTracesUnmarshaler{
-			logger: params.Logger,
-		},
-		obsrecv:  obsrecv,
-		ghClient: client,
+		obsrecv:        obsrecv,
+		ghClient:       client,
 	}
 
 	return gar
@@ -584,6 +524,204 @@ func (gar *githubActionsReceiver) Shutdown(ctx context.Context) error {
 	}
 	gar.shutdownWG.Wait()
 	return err
+}
+
+func (gar *githubActionsReceiver) processWebhookPayload(blob []byte) (interface{}, error) {
+	var event map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &event); err != nil {
+		gar.logger.Error("Failed to unmarshal blob", zap.Error(err))
+		return nil, err
+	}
+
+	// var traces ptrace.Traces
+	if _, ok := event["workflow_job"]; ok {
+		gar.logger.Debug("Unmarshalling WorkflowJobEvent")
+		var jobEvent github.WorkflowJobEvent
+		err := json.Unmarshal(blob, &jobEvent)
+
+		if err != nil {
+			gar.logger.Error("Failed to unmarshal job event", zap.Error(err))
+			return nil, err
+		}
+		if *jobEvent.WorkflowJob.Status != "completed" {
+			return nil, nil
+		}
+
+		return jobEvent, nil
+	} else if _, ok := event["workflow_run"]; ok {
+		gar.logger.Debug("Unmarshalling WorkflowRunEvent")
+		var runEvent github.WorkflowRunEvent
+		err := json.Unmarshal(blob, &runEvent)
+
+		if err != nil {
+			gar.logger.Error("Failed to unmarshal run event", zap.Error(err))
+			return nil, err
+		}
+		if *runEvent.WorkflowRun.Status != "completed" {
+			return nil, nil
+		}
+
+		return runEvent, nil
+	}
+
+	gar.logger.Warn("Unknown event type")
+	return nil, fmt.Errorf("unknown event type: %v", event)
+}
+
+func (gar *githubActionsReceiver) processLogs(e github.WorkflowRunEvent) {
+	logs := plog.NewLogs()
+	allLogs := logs.ResourceLogs().AppendEmpty()
+	serviceName := generateServiceName(gar.config, *e.Repo.FullName)
+
+	traceID, _ := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
+	allAttrs := allLogs.Resource().Attributes()
+
+	allAttrs.PutStr("traceId", traceID.String())
+	allAttrs.PutStr("service.name", serviceName)
+
+	allAttrs.PutStr("ci.github.workflow.run.actor.login", *e.WorkflowRun.Actor.Login)
+
+	allAttrs.PutStr("ci.github.workflow.run.conclusion", *e.WorkflowRun.Conclusion)
+	allAttrs.PutStr("ci.github.workflow.run.created_at", (*e.WorkflowRun.CreatedAt).Format(time.RFC3339))
+	allAttrs.PutStr("ci.github.workflow.run.display_title", *e.WorkflowRun.DisplayTitle)
+	allAttrs.PutStr("ci.github.workflow.run.event", *e.WorkflowRun.Event)
+	allAttrs.PutStr("ci.github.workflow.run.head_branch", *e.WorkflowRun.HeadBranch)
+	allAttrs.PutStr("ci.github.workflow.run.head_sha", *e.WorkflowRun.HeadSHA)
+	allAttrs.PutStr("ci.github.workflow.run.html_url", *e.WorkflowRun.HTMLURL)
+	allAttrs.PutInt("ci.github.workflow.run.id", *e.WorkflowRun.ID)
+	allAttrs.PutStr("ci.github.workflow.run.name", *e.WorkflowRun.Name)
+	// attrs.PutStr("ci.github.workflow.run.path", *e.WorkflowRun.Path)
+	if *e.WorkflowRun.PreviousAttemptURL != "" {
+		htmlURL := transformGitHubAPIURL(*e.WorkflowRun.PreviousAttemptURL)
+		allAttrs.PutStr("ci.github.workflow.run.previous_attempt_url", htmlURL)
+	}
+	allAttrs.PutInt("ci.github.workflow.run.run_attempt", int64(*e.WorkflowRun.RunAttempt))
+	allAttrs.PutStr("ci.github.workflow.run.run_started_at", e.WorkflowRun.RunStartedAt.Format(time.RFC3339))
+	allAttrs.PutStr("ci.github.workflow.run.status", *e.WorkflowRun.Status)
+	allAttrs.PutStr("ci.github.workflow.run.updated_at", e.WorkflowRun.UpdatedAt.Format(time.RFC3339))
+
+	allAttrs.PutStr("ci.github.workflow.run.sender.login", *e.Sender.Login)
+	allAttrs.PutStr("ci.github.workflow.run.triggering_actor.login", *e.WorkflowRun.TriggeringActor.Login)
+	allAttrs.PutStr("ci.github.workflow.run.updated_at", e.WorkflowRun.UpdatedAt.Format(time.RFC3339))
+
+	allAttrs.PutStr("ci.system", "github")
+
+	allAttrs.PutStr("scm.system", "git")
+
+	allAttrs.PutStr("scm.git.head_branch", *e.WorkflowRun.HeadBranch)
+	allAttrs.PutStr("scm.git.head_commit.author.email", *e.WorkflowRun.HeadCommit.Author.Email)
+	allAttrs.PutStr("scm.git.head_commit.author.name", *e.WorkflowRun.HeadCommit.Author.Name)
+	allAttrs.PutStr("scm.git.head_commit.committer.email", *e.WorkflowRun.HeadCommit.Committer.Email)
+	allAttrs.PutStr("scm.git.head_commit.committer.name", *e.WorkflowRun.HeadCommit.Committer.Name)
+	allAttrs.PutStr("scm.git.head_commit.message", *e.WorkflowRun.HeadCommit.Message)
+	allAttrs.PutStr("scm.git.head_commit.timestamp", e.WorkflowRun.HeadCommit.Timestamp.Format(time.RFC3339))
+	allAttrs.PutStr("scm.git.head_sha", *e.WorkflowRun.HeadSHA)
+
+	if len(e.WorkflowRun.PullRequests) > 0 {
+		var prUrls []string
+		for _, pr := range e.WorkflowRun.PullRequests {
+			prUrls = append(prUrls, convertPRURL(*pr.URL))
+		}
+		allAttrs.PutStr("scm.git.pull_requests.url", strings.Join(prUrls, ";"))
+	}
+	allAttrs.PutStr("scm.git.repo", *e.Repo.FullName)
+
+	url, _, err := gar.ghClient.Actions.GetWorkflowRunAttemptLogs(context.Background(), *e.Repo.Owner.Login, *e.Repo.Name, *e.WorkflowRun.ID, int(*e.WorkflowRun.RunAttempt), 10)
+
+	if err != nil {
+		gar.logger.Error("Failed to get logs", zap.Error(err))
+		return
+	}
+
+	out, err := os.CreateTemp("", "tmpfile-")
+	if err != nil {
+		gar.logger.Error("Failed to create temp file", zap.Error(err))
+		return
+	}
+	defer out.Close()
+	defer os.Remove(out.Name())
+
+	resp, err := http.Get(url.String())
+	if err != nil {
+		gar.logger.Error("Failed to get logs", zap.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy the response into the temp file
+	io.Copy(out, resp.Body)
+
+	archive, _ := zip.OpenReader(out.Name())
+	defer archive.Close()
+
+	// steps is a map of job names to a map of step numbers to file names
+	var steps = make([]string, 0)
+	var files = make([]*zip.File, 0)
+
+	// first we get all the directories. each directory is a job
+	for _, f := range archive.File {
+		if f.FileInfo().IsDir() {
+			// if the file is a directory, then it's a job. each file in this directory is a step
+			steps = append(steps, f.Name)
+		} else {
+			files = append(files, f)
+		}
+	}
+
+	for _, jobName := range steps {
+		// TODO: set attribute based on job name
+		// generateStepSpanID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt), jobName,
+
+		jobLogsScope := allLogs.ScopeLogs().AppendEmpty()
+		jobLogsScope.Scope().Attributes().PutStr("ci.github.workflow.job.name", jobName)
+
+		for _, logFile := range files {
+			if strings.HasPrefix(logFile.Name, jobName) {
+
+				// the log file belongs to this job.
+				// attrs.PutStr("ci.github.workflow.job.name", *e.WorkflowJob.Name)
+
+				fileNameWithoutDir := strings.Replace(logFile.Name, jobName, "", 1)
+				stepNumber, _ := strconv.Atoi(strings.Split(fileNameWithoutDir, "_")[0])
+
+				ff, err := logFile.Open()
+				if err != nil {
+					gar.logger.Error("Failed to open file", zap.Error(err))
+					break
+				}
+
+				scanner := bufio.NewScanner(ff)
+				for scanner.Scan() {
+					record := jobLogsScope.LogRecords().AppendEmpty()
+					record.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber))
+
+					now := pcommon.NewTimestampFromTime(time.Now())
+
+					ts, line, _ := strings.Cut(scanner.Text(), " ")
+					parsedTime, _ := time.Parse(time.RFC3339, ts)
+
+					record.SetObservedTimestamp(now)
+					record.SetTimestamp(pcommon.NewTimestampFromTime(parsedTime))
+
+					// TODO(maybe): handle log groups and sections? filter them out?
+					record.Body().SetStr(line)
+				}
+				ff.Close()
+
+				if err := scanner.Err(); err != nil {
+					gar.logger.Error("error reading file", zap.Error(err))
+				}
+
+			}
+		}
+
+	}
+
+	consumerErr := gar.logsConsumer.ConsumeLogs(context.Background(), logs)
+	if consumerErr != nil {
+		gar.logger.Error("Failed to process logs", zap.Error(consumerErr))
+		return
+	}
 }
 
 func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -627,44 +765,56 @@ func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Reque
 
 	gar.logger.Debug("Received request", zap.ByteString("payload", slurp))
 
-	td, err := gar.jsonUnmarshaler.UnmarshalTraces(slurp, gar.config)
+	event, err := gar.processWebhookPayload(slurp)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// TODO: get logs based on runId & runAttempt
 
-	// url, response, err := gar.ghClient.Actions.GetWorkflowRunAttemptLogs(context.Background(), *event.Repo.Organization.Name, *event.Repo.Name, *event.WorkflowJob.RunID, int(*event.WorkflowJob.RunAttempt), 10)
-
-	// out, _ := os.CreateTemp("", "tmpfile-")
-	// defer out.Close()
-	// defer os.Remove(out.Name())
-
-	// resp, _ := http.Get(url.String())
-	// defer resp.Body.Close()
-
-	// // Copy the response into the temp file
-	// io.Copy(out, resp.Body)
-
-	// archive, _ := zip.OpenReader(out.Name())
-	// defer archive.Close()
-
-	// for _, f := range archive.File {
-
-	// 	// Create the destination file path
-
-	// 	// Print the file path
-	// 	fmt.Println("extracting file ", f.Name)
-	// }
-
-	gar.logger.Debug("Unmarshaled spans", zap.Int("#spans", td.SpanCount()))
-
-	// Pass the traces to the nextConsumer
-	consumerErr := gar.tracesConsumer.ConsumeTraces(ctx, td)
-	if consumerErr != nil {
-		gar.logger.Error("Failed to process traces", zap.Error(consumerErr))
-		http.Error(w, "Failed to process traces", http.StatusInternalServerError)
+	// If event is nil, it means the event was not a "completed" event
+	if event == nil {
+		w.WriteHeader(http.StatusAccepted)
 		return
+	}
+
+	var traces ptrace.Traces
+
+	switch e := event.(type) {
+	case github.WorkflowJobEvent:
+		traces, err = processWorflowJobEvent(&e, gar.config, gar.logger)
+		if err != nil {
+			gar.logger.Error("Failed to convert event to traces", zap.Error(err))
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+	case github.WorkflowRunEvent:
+		traces, err = processWorflowRunEvent(&e, gar.config, gar.logger)
+		if err != nil {
+			gar.logger.Error("Failed to convert event to traces", zap.Error(err))
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// there's a log pipeline for this receiver, request logs
+		if gar.logsConsumer != nil {
+			go gar.processLogs(e)
+		}
+
+	}
+
+	gar.logger.Debug("Unmarshaled spans", zap.Int("#spans", traces.SpanCount()))
+
+	// There's a trace pipeline for this receiver
+	if gar.tracesConsumer != nil {
+
+		// Pass the traces to the nextConsumer
+		consumerErr := gar.tracesConsumer.ConsumeTraces(ctx, traces)
+		if consumerErr != nil {
+			gar.logger.Error("Failed to process traces", zap.Error(consumerErr))
+			http.Error(w, "Failed to process traces", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusAccepted)
