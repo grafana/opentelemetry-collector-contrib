@@ -63,7 +63,7 @@ func processWorflowJobEvent(event *github.WorkflowJobEvent, config *Config, logg
 	}
 
 	parentSpanID := createParentSpan(scopeSpans, event.WorkflowJob.Steps, event.WorkflowJob, traceID, logger)
-	processSteps(scopeSpans, event.WorkflowJob.Steps, *event.WorkflowJob, traceID, parentSpanID, logger)
+	processSteps(scopeSpans, *event.WorkflowJob, traceID, parentSpanID, logger)
 
 	return traces, nil
 }
@@ -232,14 +232,6 @@ func createResourceAttributes(resource pcommon.Resource, event interface{}, conf
 	}
 }
 
-func checkDuplicateStepNames(steps []*github.TaskStep) map[string]int {
-	nameCount := make(map[string]int)
-	for _, step := range steps {
-		nameCount[*step.Name]++
-	}
-	return nameCount
-}
-
 func convertPRURL(apiURL string) string {
 	apiURL = strings.Replace(apiURL, "/repos", "", 1)
 	apiURL = strings.Replace(apiURL, "/pulls", "/pull", 1)
@@ -291,7 +283,7 @@ func createRootSpan(resourceSpans ptrace.ResourceSpans, event *github.WorkflowRu
 	return rootSpanID, nil
 }
 
-func createSpan(scopeSpans ptrace.ScopeSpans, step github.TaskStep, job github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger, stepNumber ...int) pcommon.SpanID {
+func createSpan(scopeSpans ptrace.ScopeSpans, step github.TaskStep, job github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger) pcommon.SpanID {
 	logger.Debug("Processing span", zap.String("step_name", *step.Name))
 	span := scopeSpans.Spans().AppendEmpty()
 	span.SetTraceID(traceID)
@@ -302,13 +294,10 @@ func createSpan(scopeSpans ptrace.ScopeSpans, step github.TaskStep, job github.W
 	span.Attributes().PutStr("ci.github.workflow.job.step.name", *step.Name)
 	span.Attributes().PutStr("ci.github.workflow.job.step.status", *step.Status)
 	span.Attributes().PutStr("ci.github.workflow.job.step.conclusion", *step.Conclusion)
-	if len(stepNumber) > 0 && stepNumber[0] > 0 {
-		spanID, _ = generateStepSpanID(*job.RunID, *job.RunAttempt, *job.Name, *step.Name, stepNumber[0])
-		span.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber[0]))
-	} else {
-		spanID, _ = generateStepSpanID(*job.RunID, *job.RunAttempt, *job.Name, *step.Name)
-		span.Attributes().PutInt("ci.github.workflow.job.step.number", int64(*step.Number))
-	}
+
+	spanID, _ = generateStepSpanID(*job.RunID, *job.RunAttempt, *job.Name, int(*step.Number))
+	span.Attributes().PutInt("ci.github.workflow.job.step.number", int64(*step.Number))
+
 	span.Attributes().PutStr("ci.github.workflow.job.step.started_at", step.StartedAt.Format(time.RFC3339))
 	span.Attributes().PutStr("ci.github.workflow.job.step.completed_at", step.CompletedAt.Format(time.RFC3339))
 
@@ -382,13 +371,9 @@ func generateServiceName(config *Config, fullName string) string {
 	return fmt.Sprintf("%s%s%s", config.ServiceNamePrefix, formattedName, config.ServiceNameSuffix)
 }
 
-func generateStepSpanID(runID, runAttempt int64, jobName, stepName string, stepNumber ...int) (pcommon.SpanID, error) {
+func generateStepSpanID(runID, runAttempt int64, jobName string, stepNumber int) (pcommon.SpanID, error) {
 	var input string
-	if len(stepNumber) > 0 && stepNumber[0] > 0 {
-		input = fmt.Sprintf("%d%d%s%s%d", runID, runAttempt, jobName, stepName, stepNumber[0])
-	} else {
-		input = fmt.Sprintf("%d%d%s%s", runID, runAttempt, jobName, stepName)
-	}
+	input = fmt.Sprintf("%d%d%s%s", runID, runAttempt, jobName, stepNumber)
 	hash := sha256.Sum256([]byte(input))
 	spanIDHex := hex.EncodeToString(hash[:])
 
@@ -401,14 +386,9 @@ func generateStepSpanID(runID, runAttempt int64, jobName, stepName string, stepN
 	return spanID, nil
 }
 
-func processSteps(scopeSpans ptrace.ScopeSpans, steps []*github.TaskStep, job github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger) {
-	nameCount := checkDuplicateStepNames(steps)
-	for index, step := range steps {
-		if nameCount[*step.Name] > 1 {
-			createSpan(scopeSpans, *step, job, traceID, parentSpanID, logger, index+1) // Pass step number if duplicate names exist
-		} else {
-			createSpan(scopeSpans, *step, job, traceID, parentSpanID, logger)
-		}
+func processSteps(scopeSpans ptrace.ScopeSpans, job github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger) {
+	for _, step := range job.Steps {
+		createSpan(scopeSpans, *step, job, traceID, parentSpanID, logger)
 	}
 }
 
@@ -569,11 +549,11 @@ func (gar *githubActionsReceiver) processWebhookPayload(blob []byte) (interface{
 }
 
 func (gar *githubActionsReceiver) processLogs(e github.WorkflowRunEvent) {
+	serviceName := generateServiceName(gar.config, *e.Repo.FullName)
+	traceID, _ := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
+
 	logs := plog.NewLogs()
 	allLogs := logs.ResourceLogs().AppendEmpty()
-	serviceName := generateServiceName(gar.config, *e.Repo.FullName)
-
-	traceID, _ := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
 	allAttrs := allLogs.Resource().Attributes()
 
 	allAttrs.PutStr("traceId", traceID.String())
@@ -655,34 +635,31 @@ func (gar *githubActionsReceiver) processLogs(e github.WorkflowRunEvent) {
 	defer archive.Close()
 
 	// steps is a map of job names to a map of step numbers to file names
-	var steps = make([]string, 0)
+	var jobs = make([]string, 0)
 	var files = make([]*zip.File, 0)
 
 	// first we get all the directories. each directory is a job
 	for _, f := range archive.File {
 		if f.FileInfo().IsDir() {
 			// if the file is a directory, then it's a job. each file in this directory is a step
-			steps = append(steps, f.Name)
+			jobs = append(jobs, f.Name[:len(f.Name)-1])
 		} else {
 			files = append(files, f)
 		}
 	}
 
-	for _, jobName := range steps {
-		// TODO: set attribute based on job name
-		// generateStepSpanID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt), jobName,
+	for _, jobName := range jobs {
 
 		jobLogsScope := allLogs.ScopeLogs().AppendEmpty()
 		jobLogsScope.Scope().Attributes().PutStr("ci.github.workflow.job.name", jobName)
 
 		for _, logFile := range files {
+
 			if strings.HasPrefix(logFile.Name, jobName) {
-
-				// the log file belongs to this job.
-				// attrs.PutStr("ci.github.workflow.job.name", *e.WorkflowJob.Name)
-
-				fileNameWithoutDir := strings.Replace(logFile.Name, jobName, "", 1)
+				fileNameWithoutDir := strings.Replace(logFile.Name, jobName+"/", "", 1)
 				stepNumber, _ := strconv.Atoi(strings.Split(fileNameWithoutDir, "_")[0])
+
+				spanId, _ := generateStepSpanID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt), jobName, stepNumber)
 
 				ff, err := logFile.Open()
 				if err != nil {
@@ -693,6 +670,10 @@ func (gar *githubActionsReceiver) processLogs(e github.WorkflowRunEvent) {
 				scanner := bufio.NewScanner(ff)
 				for scanner.Scan() {
 					record := jobLogsScope.LogRecords().AppendEmpty()
+
+					record.SetSpanID(spanId)
+					record.SetTraceID(traceID)
+
 					record.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber))
 
 					now := pcommon.NewTimestampFromTime(time.Now())
