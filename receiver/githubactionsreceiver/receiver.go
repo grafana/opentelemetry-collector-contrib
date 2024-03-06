@@ -7,11 +7,8 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
-	"crypto/hmac"
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -402,36 +399,6 @@ func transformGitHubAPIURL(apiURL string) string {
 	return htmlURL
 }
 
-func validateSignatureSHA256(secret string, signatureHeader string, body []byte, logger *zap.Logger) bool {
-	if signatureHeader == "" || len(signatureHeader) < 7 {
-		logger.Debug("Unauthorized - No Signature Header")
-		return false
-	}
-	receivedSig := signatureHeader[7:]
-	computedHash := hmac.New(sha256.New, []byte(secret))
-	computedHash.Write(body)
-	expectedSig := hex.EncodeToString(computedHash.Sum(nil))
-
-	logger.Debug("Debugging Signatures", zap.String("Received", receivedSig), zap.String("Computed", expectedSig))
-
-	return hmac.Equal([]byte(expectedSig), []byte(receivedSig))
-}
-
-func validateSignatureSHA1(secret string, signatureHeader string, body []byte, logger *zap.Logger) bool {
-	if signatureHeader == "" {
-		logger.Debug("Unauthorized - No Signature Header")
-		return false
-	}
-	receivedSig := signatureHeader[5:] // Assume "sha1=" prefix
-	computedHash := hmac.New(sha1.New, []byte(secret))
-	computedHash.Write(body)
-	expectedSig := hex.EncodeToString(computedHash.Sum(nil))
-
-	logger.Debug("Debugging Signatures", zap.String("Received", receivedSig), zap.String("Computed", expectedSig))
-
-	return hmac.Equal([]byte(expectedSig), []byte(receivedSig))
-}
-
 func (r *githubActionsReceiver) registerTracesConsumer(tc consumer.Traces) error {
 	r.tracesConsumer = tc
 	if tc == nil {
@@ -506,49 +473,7 @@ func (gar *githubActionsReceiver) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (gar *githubActionsReceiver) processWebhookPayload(blob []byte) (interface{}, error) {
-	var event map[string]json.RawMessage
-	if err := json.Unmarshal(blob, &event); err != nil {
-		gar.logger.Error("Failed to unmarshal blob", zap.Error(err))
-		return nil, err
-	}
-
-	// var traces ptrace.Traces
-	if _, ok := event["workflow_job"]; ok {
-		gar.logger.Debug("Unmarshalling WorkflowJobEvent")
-		var jobEvent github.WorkflowJobEvent
-		err := json.Unmarshal(blob, &jobEvent)
-
-		if err != nil {
-			gar.logger.Error("Failed to unmarshal job event", zap.Error(err))
-			return nil, err
-		}
-		if *jobEvent.WorkflowJob.Status != "completed" {
-			return nil, nil
-		}
-
-		return jobEvent, nil
-	} else if _, ok := event["workflow_run"]; ok {
-		gar.logger.Debug("Unmarshalling WorkflowRunEvent")
-		var runEvent github.WorkflowRunEvent
-		err := json.Unmarshal(blob, &runEvent)
-
-		if err != nil {
-			gar.logger.Error("Failed to unmarshal run event", zap.Error(err))
-			return nil, err
-		}
-		if *runEvent.WorkflowRun.Status != "completed" {
-			return nil, nil
-		}
-
-		return runEvent, nil
-	}
-
-	gar.logger.Warn("Unknown event type")
-	return nil, fmt.Errorf("unknown event type: %v", event)
-}
-
-func (gar *githubActionsReceiver) processLogs(e github.WorkflowRunEvent) {
+func (gar *githubActionsReceiver) processLogs(e *github.WorkflowRunEvent) {
 	serviceName := generateServiceName(gar.config, *e.Repo.FullName)
 	traceID, _ := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
 
@@ -708,69 +633,46 @@ func (gar *githubActionsReceiver) processLogs(e github.WorkflowRunEvent) {
 func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	userAgent := r.Header.Get("User-Agent")
-	if !strings.HasPrefix(userAgent, "GitHub-Hookshot") {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
 	if r.URL.Path != gar.config.Path {
+
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
-	defer r.Body.Close()
-
-	slurp, err := io.ReadAll(r.Body)
+	payload, err := github.ValidatePayload(r, []byte(gar.config.Secret))
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		gar.logger.Error("Failed to validate payload", zap.Error(err))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// Validate the request if Secret is set in the configuration
-	if gar.config.Secret != "" {
-		signatureSHA256 := r.Header.Get("X-Hub-Signature-256")
-		if signatureSHA256 != "" && !validateSignatureSHA256(gar.config.Secret, signatureSHA256, slurp, gar.logger) {
-			gar.logger.Debug("Unauthorized - Signature Mismatch SHA256")
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		} else {
-			signatureSHA1 := r.Header.Get("X-Hub-Signature")
-			if signatureSHA1 != "" && !validateSignatureSHA1(gar.config.Secret, signatureSHA1, slurp, gar.logger) {
-				gar.logger.Debug("Unauthorized - Signature Mismatch SHA1")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-	}
+	gar.logger.Debug("Received request", zap.ByteString("payload", payload))
 
-	gar.logger.Debug("Received request", zap.ByteString("payload", slurp))
-
-	event, err := gar.processWebhookPayload(slurp)
+	event, err := github.ParseWebHook(github.WebHookType(r), payload)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// If event is nil, it means the event was not a "completed" event
-	if event == nil {
-		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
 	var traces ptrace.Traces
 
 	switch e := event.(type) {
-	case github.WorkflowJobEvent:
-		traces, err = processWorflowJobEvent(&e, gar.config, gar.logger)
+	case *github.WorkflowJobEvent:
+		if e.GetWorkflowJob().GetStatus() != "completed" {
+			return
+		}
+		traces, err = processWorflowJobEvent(e, gar.config, gar.logger)
 		if err != nil {
 			gar.logger.Error("Failed to convert event to traces", zap.Error(err))
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-	case github.WorkflowRunEvent:
-		traces, err = processWorflowRunEvent(&e, gar.config, gar.logger)
+	case *github.WorkflowRunEvent:
+		if e.GetWorkflowRun().GetStatus() != "completed" {
+			return
+		}
+		traces, err = processWorflowRunEvent(e, gar.config, gar.logger)
 		if err != nil {
 			gar.logger.Error("Failed to convert event to traces", zap.Error(err))
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -781,6 +683,11 @@ func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		if gar.logsConsumer != nil {
 			go gar.processLogs(e)
 		}
+
+	default:
+		gar.logger.Info("Unknown event type", zap.String("event_type", fmt.Sprintf("%T", event)))
+		w.WriteHeader(http.StatusAccepted)
+		return
 
 	}
 
