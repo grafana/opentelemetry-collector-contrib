@@ -520,13 +520,7 @@ func (gar *githubActionsReceiver) processLogs(e *github.WorkflowRunEvent) {
 	allAttrs.PutStr("scm.git.head_sha", *e.WorkflowRun.HeadSHA)
 	allAttrs.PutStr("scm.git.repo", *e.Repo.FullName)
 
-	if len(e.WorkflowRun.PullRequests) > 0 {
-		var prUrls []string
-		for _, pr := range e.WorkflowRun.PullRequests {
-			prUrls = append(prUrls, convertPRURL(*pr.URL))
-		}
-		allAttrs.PutStr("scm.git.pull_requests.url", strings.Join(prUrls, ";"))
-	}
+	addPRsURLs(allAttrs, e.WorkflowRun.PullRequests)
 
 	url, _, err := gar.ghClient.Actions.GetWorkflowRunAttemptLogs(context.Background(), *e.Repo.Owner.Login, *e.Repo.Name, *e.WorkflowRun.ID, int(*e.WorkflowRun.RunAttempt), 10)
 
