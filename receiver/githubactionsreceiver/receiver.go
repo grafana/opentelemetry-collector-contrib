@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,15 +145,13 @@ func createResourceAttributes(resource pcommon.Resource, event interface{}, conf
 		attrs.PutStr("ci.github.workflow.job.head_sha", *e.WorkflowJob.HeadSHA)
 		attrs.PutStr("ci.github.workflow.job.html_url", *e.WorkflowJob.HTMLURL)
 		attrs.PutInt("ci.github.workflow.job.id", *e.WorkflowJob.ID)
+
 		if len(e.WorkflowJob.Labels) > 0 {
-			for i, label := range e.WorkflowJob.Labels {
-				e.WorkflowJob.Labels[i] = strings.ToLower(label)
+			labels := attrs.PutEmptySlice("ci.github.workflow.job.labels")
+
+			for _, label := range e.WorkflowJob.Labels {
+				labels.AppendEmpty().SetStr(label)
 			}
-			sort.Strings(e.WorkflowJob.Labels)
-			joinedLabels := strings.Join(e.WorkflowJob.Labels, ",")
-			attrs.PutStr("ci.github.workflow.job.labels", joinedLabels)
-		} else {
-			attrs.PutStr("ci.github.workflow.job.labels", "no labels")
 		}
 
 		attrs.PutStr("ci.github.workflow.job.labels", e.WorkflowJob.Labels[0])
@@ -187,7 +184,6 @@ func createResourceAttributes(resource pcommon.Resource, event interface{}, conf
 		attrs.PutStr("ci.github.workflow.run.html_url", *e.WorkflowRun.HTMLURL)
 		attrs.PutInt("ci.github.workflow.run.id", *e.WorkflowRun.ID)
 		attrs.PutStr("ci.github.workflow.run.name", *e.WorkflowRun.Name)
-		// attrs.PutStr("ci.github.workflow.run.path", *e.WorkflowRun.Path)
 		if *e.WorkflowRun.PreviousAttemptURL != "" {
 			htmlURL := transformGitHubAPIURL(*e.WorkflowRun.PreviousAttemptURL)
 			attrs.PutStr("ci.github.workflow.run.previous_attempt_url", htmlURL)
@@ -213,16 +209,9 @@ func createResourceAttributes(resource pcommon.Resource, event interface{}, conf
 		attrs.PutStr("scm.git.head_commit.message", *e.WorkflowRun.HeadCommit.Message)
 		attrs.PutStr("scm.git.head_commit.timestamp", e.WorkflowRun.HeadCommit.Timestamp.Format(time.RFC3339))
 		attrs.PutStr("scm.git.head_sha", *e.WorkflowRun.HeadSHA)
-
-		if len(e.WorkflowRun.PullRequests) > 0 {
-			var prUrls []string
-			for _, pr := range e.WorkflowRun.PullRequests {
-				prUrls = append(prUrls, convertPRURL(*pr.URL))
-			}
-			attrs.PutStr("scm.git.pull_requests.url", strings.Join(prUrls, ";"))
-		}
-
 		attrs.PutStr("scm.git.repo", *e.Repo.FullName)
+
+		addPRsURLs(attrs, e.WorkflowRun.PullRequests)
 
 	default:
 		logger.Error("unknown event type", zap.String("event_type", fmt.Sprintf("%T", event)))
@@ -473,6 +462,15 @@ func (gar *githubActionsReceiver) Shutdown(ctx context.Context) error {
 	return err
 }
 
+func addPRsURLs(attrs pcommon.Map, PullRequests []*github.PullRequest) {
+	if len(PullRequests) > 0 {
+		PRs := attrs.PutEmptySlice("scm.git.pull_requests.url")
+		for _, pr := range PullRequests {
+			PRs.AppendEmpty().SetStr(convertPRURL(*pr.URL))
+		}
+	}
+}
+
 func (gar *githubActionsReceiver) processLogs(e *github.WorkflowRunEvent) {
 	serviceName := generateServiceName(gar.config, *e.Repo.FullName)
 	traceID, _ := generateTraceID(*e.WorkflowRun.ID, int64(*e.WorkflowRun.RunAttempt))
@@ -495,7 +493,6 @@ func (gar *githubActionsReceiver) processLogs(e *github.WorkflowRunEvent) {
 	allAttrs.PutStr("ci.github.workflow.run.html_url", *e.WorkflowRun.HTMLURL)
 	allAttrs.PutInt("ci.github.workflow.run.id", *e.WorkflowRun.ID)
 	allAttrs.PutStr("ci.github.workflow.run.name", *e.WorkflowRun.Name)
-	// attrs.PutStr("ci.github.workflow.run.path", *e.WorkflowRun.Path)
 	if *e.WorkflowRun.PreviousAttemptURL != "" {
 		htmlURL := transformGitHubAPIURL(*e.WorkflowRun.PreviousAttemptURL)
 		allAttrs.PutStr("ci.github.workflow.run.previous_attempt_url", htmlURL)
@@ -521,6 +518,7 @@ func (gar *githubActionsReceiver) processLogs(e *github.WorkflowRunEvent) {
 	allAttrs.PutStr("scm.git.head_commit.message", *e.WorkflowRun.HeadCommit.Message)
 	allAttrs.PutStr("scm.git.head_commit.timestamp", e.WorkflowRun.HeadCommit.Timestamp.Format(time.RFC3339))
 	allAttrs.PutStr("scm.git.head_sha", *e.WorkflowRun.HeadSHA)
+	allAttrs.PutStr("scm.git.repo", *e.Repo.FullName)
 
 	if len(e.WorkflowRun.PullRequests) > 0 {
 		var prUrls []string
@@ -529,7 +527,6 @@ func (gar *githubActionsReceiver) processLogs(e *github.WorkflowRunEvent) {
 		}
 		allAttrs.PutStr("scm.git.pull_requests.url", strings.Join(prUrls, ";"))
 	}
-	allAttrs.PutStr("scm.git.repo", *e.Repo.FullName)
 
 	url, _, err := gar.ghClient.Actions.GetWorkflowRunAttemptLogs(context.Background(), *e.Repo.Owner.Login, *e.Repo.Name, *e.WorkflowRun.ID, int(*e.WorkflowRun.RunAttempt), 10)
 
