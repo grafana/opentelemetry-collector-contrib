@@ -7,11 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"sync"
 
+	"github.com/google/go-github/v60/github"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
@@ -22,14 +21,14 @@ import (
 var errMissingEndpoint = errors.New("missing a receiver endpoint")
 
 type githubActionsReceiver struct {
-	nextConsumer    consumer.Traces
-	config          *Config
-	server          *http.Server
-	shutdownWG      sync.WaitGroup
-	createSettings  receiver.CreateSettings
-	logger          *zap.Logger
-	jsonUnmarshaler *jsonTracesUnmarshaler
-	obsrecv         *receiverhelper.ObsReport
+	nextConsumer   consumer.Traces
+	config         *Config
+	server         *http.Server
+	shutdownWG     sync.WaitGroup
+	createSettings receiver.CreateSettings
+	logger         *zap.Logger
+	obsrecv        *receiverhelper.ObsReport
+	ghClient       *github.Client
 }
 
 func newTracesReceiver(
@@ -60,15 +59,15 @@ func newTracesReceiver(
 		return nil, err
 	}
 
+	client := github.NewClient(nil)
+
 	gar := &githubActionsReceiver{
 		nextConsumer:   nextConsumer,
 		config:         config,
 		createSettings: params,
 		logger:         params.Logger,
-		jsonUnmarshaler: &jsonTracesUnmarshaler{
-			logger: params.Logger,
-		},
-		obsrecv: obsrecv,
+		obsrecv:        obsrecv,
+		ghClient:       client,
 	}
 
 	return gar, nil
@@ -106,45 +105,26 @@ func (gar *githubActionsReceiver) Shutdown(ctx context.Context) error {
 func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	userAgent := r.Header.Get("User-Agent")
-	if !strings.HasPrefix(userAgent, "GitHub-Hookshot") {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
 	if r.URL.Path != gar.config.Path {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
-	defer r.Body.Close()
-
-	slurp, err := io.ReadAll(r.Body)
+	payload, err := github.ValidatePayload(r, []byte(gar.config.Secret))
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Validate the request if Secret is set in the configuration
-	if gar.config.Secret != "" {
-		signatureSHA256 := r.Header.Get("X-Hub-Signature-256")
-		if signatureSHA256 != "" && !validateSignatureSHA256(gar.config.Secret, signatureSHA256, slurp, gar.logger) {
-			gar.logger.Debug("Unauthorized - Signature Mismatch SHA256")
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		} else {
-			signatureSHA1 := r.Header.Get("X-Hub-Signature")
-			if signatureSHA1 != "" && !validateSignatureSHA1(gar.config.Secret, signatureSHA1, slurp, gar.logger) {
-				gar.logger.Debug("Unauthorized - Signature Mismatch SHA1")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
+	event, err := github.ParseWebHook(github.WebHookType(r), payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	gar.logger.Debug("Received request", zap.ByteString("payload", slurp))
+	gar.logger.Debug("Received request", zap.Any("payload", event))
 
-	td, err := gar.jsonUnmarshaler.UnmarshalTraces(slurp, gar.config)
+	td, err := eventToTraces(event, gar.config, gar.logger)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
