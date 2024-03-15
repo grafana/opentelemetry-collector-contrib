@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/google/go-github/v61 v61.0.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent v0.99.0
 	github.com/stretchr/testify v1.9.0
 	go.opentelemetry.io/collector/component v0.99.0
 	go.opentelemetry.io/collector/config/confighttp v0.99.0

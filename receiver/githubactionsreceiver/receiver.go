@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/go-github/v61/github"
 	"go.opentelemetry.io/collector/component"
@@ -21,7 +22,8 @@ import (
 var errMissingEndpoint = errors.New("missing a receiver endpoint")
 
 type githubActionsReceiver struct {
-	nextConsumer   consumer.Traces
+	logsConsumer   consumer.Logs
+	tracesConsumer consumer.Traces
 	config         *Config
 	server         *http.Server
 	shutdownWG     sync.WaitGroup
@@ -31,10 +33,9 @@ type githubActionsReceiver struct {
 	ghClient       *github.Client
 }
 
-func newTracesReceiver(
+func newReceiver(
 	params receiver.CreateSettings,
 	config *Config,
-	nextConsumer consumer.Traces,
 ) (*githubActionsReceiver, error) {
 	if config.Endpoint == "" {
 		return nil, errMissingEndpoint
@@ -55,10 +56,12 @@ func newTracesReceiver(
 		return nil, err
 	}
 
-	client := github.NewClient(nil)
+	var client *github.Client
+	if config.Token != "" {
+		client = github.NewClient(nil).WithAuthToken(config.Token)
+	}
 
 	gar := &githubActionsReceiver{
-		nextConsumer:   nextConsumer,
 		config:         config,
 		createSettings: params,
 		logger:         params.Logger,
@@ -69,12 +72,61 @@ func newTracesReceiver(
 	return gar, nil
 }
 
+// newLogsReceiver creates a trace receiver based on provided config.
+func newTracesReceiver(
+	_ context.Context,
+	set receiver.CreateSettings,
+	cfg component.Config,
+	consumer consumer.Traces,
+) (receiver.Traces, error) {
+	rCfg := cfg.(*Config)
+	var err error
+
+	r := receivers.GetOrAdd(cfg, func() component.Component {
+		var rcv component.Component
+		rcv, err = newReceiver(set, rCfg)
+		return rcv
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	r.Unwrap().(*githubActionsReceiver).tracesConsumer = consumer
+
+	return r, nil
+}
+
+// newLogsReceiver creates a logs receiver based on provided config.
+func newLogsReceiver(
+	_ context.Context,
+	set receiver.CreateSettings,
+	cfg component.Config,
+	consumer consumer.Logs,
+) (receiver.Logs, error) {
+	rCfg := cfg.(*Config)
+	var err error
+
+	r := receivers.GetOrAdd(cfg, func() component.Component {
+		var rcv component.Component
+		rcv, err = newReceiver(set, rCfg)
+		return rcv
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	r.Unwrap().(*githubActionsReceiver).logsConsumer = consumer
+
+	return r, nil
+}
+
 func (gar *githubActionsReceiver) Start(ctx context.Context, host component.Host) error {
 	endpoint := fmt.Sprintf("%s%s", gar.config.Endpoint, gar.config.Path)
 	gar.logger.Info("Starting GithubActions server", zap.String("endpoint", endpoint))
 	gar.server = &http.Server{
-		Addr:    gar.config.ServerConfig.Endpoint,
-		Handler: gar,
+		Addr:              gar.config.ServerConfig.Endpoint,
+		Handler:           gar,
+		ReadHeaderTimeout: 20 * time.Second,
 	}
 
 	gar.shutdownWG.Add(1)
@@ -145,28 +197,45 @@ func (gar *githubActionsReceiver) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	}
 
 	gar.logger.Debug("Received valid GitHub event", zap.String("type", eventType))
+	traceErr := false
 
-	// Convert the GitHub event to OpenTelemetry traces
-	td, err := eventToTraces(event, gar.config, gar.logger)
-	if err != nil {
-		gar.logger.Debug("Failed to convert event to traces", zap.Error(err))
-		http.Error(w, "Error processing traces", http.StatusBadRequest)
-		return
+	// if a trace consumer is set, process the event into traces
+	if gar.tracesConsumer != nil {
+		td, err := eventToTraces(event, gar.config, gar.logger.Named("eventToTraces"))
+		if err != nil {
+			traceErr = true
+			gar.logger.Debug("Failed to convert event to traces", zap.Error(err))
+		}
+
+		if td != nil {
+			// Pass the traces to the nextConsumer
+			consumerErr := gar.tracesConsumer.ConsumeTraces(ctx, *td)
+			if consumerErr != nil {
+				traceErr = true
+				gar.logger.Debug("Failed to process traces", zap.Error(consumerErr))
+			}
+		}
 	}
 
-	// Process traces if any are present
-	if td.SpanCount() > 0 {
-		gar.logger.Debug("Unmarshaled spans", zap.Int("#spans", td.SpanCount()))
+	// if a log consumer is set, process the event into logs
+	if gar.logsConsumer != nil {
+		if gar.ghClient == nil {
+			gar.logger.Error("GitHub token not provided, but a logs consumer is set. Logs will not be processed. Please provide a GitHub token.")
+		} else {
+			withTraceInfo := gar.tracesConsumer != nil && traceErr == false
 
-		// Pass the traces to the nextConsumer
-		consumerErr := gar.nextConsumer.ConsumeTraces(ctx, td)
-		if consumerErr != nil {
-			gar.logger.Debug("Failed to process traces", zap.Error(consumerErr))
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
+			ld, err := eventToLogs(event, gar.config, gar.ghClient, gar.logger.Named("eventToLogs"), withTraceInfo)
+			if err != nil {
+				gar.logger.Error("Failed to process logs", zap.Error(err))
+			}
+
+			if ld != nil {
+				consumerErr := gar.logsConsumer.ConsumeLogs(ctx, *ld)
+				if consumerErr != nil {
+					gar.logger.Error("Failed to consume logs", zap.Error(consumerErr))
+				}
+			}
 		}
-	} else {
-		gar.logger.Debug("No spans to unmarshal or traces not initialised")
 	}
 
 	w.WriteHeader(http.StatusAccepted)

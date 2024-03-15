@@ -11,5 +11,6 @@ var (
 )
 
 const (
-	TracesStability  = component.StabilityLevelAlpha
+	TracesStability = component.StabilityLevelAlpha
+	LogsStability   = component.StabilityLevelAlpha
 )

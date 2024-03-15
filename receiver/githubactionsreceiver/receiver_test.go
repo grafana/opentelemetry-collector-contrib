@@ -4,6 +4,7 @@
 package githubactionsreceiver
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,13 +22,31 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func TestCreateNewTracesReceiver(t *testing.T) {
+func TestNewTracesReceiver(t *testing.T) {
+	t.Run("Missing consumer fails", func(t *testing.T) {
+		rec, err := newTracesReceiver(context.Background(), receivertest.NewNopCreateSettings(), createDefaultConfig().(*Config), nil)
+
+		require.ErrorIs(t, err, component.ErrNilNextConsumer)
+		require.Nil(t, rec)
+	})
+}
+
+func TestNewLogsReceiver(t *testing.T) {
+	t.Run("Missing consumer fails", func(t *testing.T) {
+		rec, err := newLogsReceiver(context.Background(), receivertest.NewNopCreateSettings(), createDefaultConfig().(*Config), nil)
+
+		require.ErrorIs(t, err, component.ErrNilNextConsumer)
+		require.Nil(t, rec)
+	})
+}
+
+func TestNewReceiver(t *testing.T) {
 	defaultConfig := createDefaultConfig().(*Config)
 
 	tests := []struct {
 		desc     string
 		config   Config
-		consumer consumer.Traces
+		consumer consumer.Logs
 		err      error
 	}{
 		{
@@ -50,7 +69,7 @@ func TestCreateNewTracesReceiver(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
-			rec, err := newTracesReceiver(receivertest.NewNopCreateSettings(), &test.config, test.consumer)
+			rec, err := newReceiver(receivertest.NewNopCreateSettings(), &test.config)
 			if test.err == nil {
 				require.NotNil(t, rec)
 			} else {
@@ -103,7 +122,15 @@ func TestEventToTracesTraces(t *testing.T) {
 				require.NoError(t, err)
 			}
 
+<<<<<<< HEAD:receiver/githubactionsreceiver/trace_receiver_test.go
 			require.Equal(t, test.expectedSpans, traces.SpanCount(), fmt.Sprintf("%s: unexpected number of spans", test.desc))
+=======
+			if test.expectedSpans != 0 {
+				require.Equal(t, test.expectedSpans, traces.SpanCount())
+			} else {
+				require.Nil(t, traces)
+			}
+>>>>>>> 8387a0de00 (feat: add logs support):receiver/githubactionsreceiver/receiver_test.go
 		})
 	}
 }

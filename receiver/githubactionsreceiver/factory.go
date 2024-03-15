@@ -4,14 +4,11 @@
 package githubactionsreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubactionsreceiver"
 
 import (
-	"context"
-	"errors"
-
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
-	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubactionsreceiver/internal/metadata"
 )
 
@@ -27,7 +24,8 @@ func NewFactory() receiver.Factory {
 	return receiver.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		receiver.WithTraces(createTracesReceiver, metadata.TracesStability),
+		receiver.WithTraces(newTracesReceiver, metadata.TracesStability),
+		receiver.WithLogs(newLogsReceiver, metadata.LogsStability),
 	)
 }
 
@@ -42,16 +40,8 @@ func createDefaultConfig() component.Config {
 	}
 }
 
-// createTracesReceiver creates a trace receiver based on provided config.
-func createTracesReceiver(
-	_ context.Context,
-	set receiver.CreateSettings,
-	cfg component.Config,
-	nextConsumer consumer.Traces,
-) (receiver.Traces, error) {
-	rCfg := cfg.(*Config)
-	if nextConsumer == nil {
-		return nil, errors.New("no nextConsumer provided")
-	}
-	return newTracesReceiver(set, rCfg, nextConsumer)
-}
+// This is the map of already created githubactions receivers for particular configurations.
+// We maintain this map because the Factory is asked log and metric receivers separately
+// when it gets CreateLogsReceiver() and CreateMetricsReceiver() but they must not
+// create separate objects, they must use one receiver object per configuration.
+var receivers = sharedcomponent.NewSharedComponents()
