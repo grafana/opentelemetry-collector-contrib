@@ -4,6 +4,7 @@ go 1.21
 
 require (
 	github.com/google/go-github/v60 v60.0.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent v0.96.0
 	github.com/stretchr/testify v1.8.4
 	go.opentelemetry.io/collector/component v0.96.0
 	go.opentelemetry.io/collector/config/confighttp v0.96.0
@@ -42,6 +43,7 @@ require (
 	github.com/prometheus/client_model v0.6.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
+	github.com/rogpeppe/go-internal v1.11.0 // indirect
 	github.com/rs/cors v1.10.1 // indirect
 	go.opentelemetry.io/collector v0.96.0 // indirect
 	go.opentelemetry.io/collector/config/configauth v0.96.0 // indirect

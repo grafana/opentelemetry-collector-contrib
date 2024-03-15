@@ -3,7 +3,7 @@ type: githubactions
 status:
   class: receiver
   stability:
-    alpha: [traces]
+    alpha: [traces, logs]
   distributions:
   codeowners:
     active: ["krzko", "rich-bain"]

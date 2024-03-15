@@ -36,7 +36,7 @@ func TestCreateTracesReceiver(t *testing.T) {
 				cfg.Endpoint = "localhost:8080"
 				require.NoError(t, cfg.Validate(), "error validating default config")
 
-				_, err := createTracesReceiver(
+				_, err := newTracesReceiver(
 					context.Background(),
 					receivertest.NewNopCreateSettings(),
 					cfg,
@@ -54,7 +54,7 @@ func TestCreateTracesReceiver(t *testing.T) {
 				cfg.Endpoint = "localhost:8080"
 				require.NoError(t, cfg.Validate(), "error validating default config")
 
-				_, err := createTracesReceiver(
+				_, err := newTracesReceiver(
 					context.Background(),
 					receivertest.NewNopCreateSettings(),
 					cfg,

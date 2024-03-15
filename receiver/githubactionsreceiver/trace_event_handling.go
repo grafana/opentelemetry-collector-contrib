@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrace.Traces, error) {
+func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (*ptrace.Traces, error) {
 	logger.Debug("Determining event")
 	traces := ptrace.NewTraces()
 	resourceSpans := traces.ResourceSpans().AppendEmpty()
@@ -26,7 +26,7 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 	case *github.WorkflowJobEvent:
 		if e.GetWorkflowJob().GetStatus() != "completed" {
 			logger.Debug("Job not completed, skipping")
-			return ptrace.Traces{}, nil
+			return nil, nil
 		}
 
 		logger.Info("Processing WorkflowJobEvent", zap.String("job_name", e.GetWorkflowJob().GetName()), zap.String("repo", e.GetRepo().GetFullName()))
@@ -36,7 +36,7 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 		traceID, err := generateTraceID(e.GetWorkflowJob().GetRunID(), int(e.GetWorkflowJob().GetRunAttempt()))
 		if err != nil {
 			logger.Error("Failed to generate trace ID", zap.Error(err))
-			return ptrace.Traces{}, fmt.Errorf("failed to generate trace ID: %w", err)
+			return nil, fmt.Errorf("failed to generate trace ID: %w", err)
 		}
 
 		parentSpanID := createParentSpan(scopeSpans, e.GetWorkflowJob().Steps, e.GetWorkflowJob(), traceID, logger)
@@ -45,7 +45,7 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 	case *github.WorkflowRunEvent:
 		if e.GetWorkflowRun().GetStatus() != "completed" {
 			logger.Debug("Run not completed, skipping")
-			return ptrace.Traces{}, nil
+			return nil, nil
 		}
 		logger.Info("Processing WorkflowRunEvent", zap.String("workflow_name", e.GetWorkflowRun().GetName()), zap.String("repo", e.GetRepo().GetFullName()))
 		runResource := resourceSpans.Resource()
@@ -53,7 +53,7 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 		traceID, err := generateTraceID(e.GetWorkflowRun().GetID(), e.GetWorkflowRun().GetRunAttempt())
 		if err != nil {
 			logger.Error("Failed to generate trace ID", zap.Error(err))
-			return ptrace.Traces{}, fmt.Errorf("failed to generate trace ID: %w", err)
+			return nil, fmt.Errorf("failed to generate trace ID: %w", err)
 		}
 
 		createResourceAttributes(runResource, e, config, logger)
@@ -61,10 +61,10 @@ func eventToTraces(event interface{}, config *Config, logger *zap.Logger) (ptrac
 
 	default:
 		logger.Error("unknown event type, dropping payload")
-		return ptrace.Traces{}, fmt.Errorf("unknown event type")
+		return nil, fmt.Errorf("unknown event type")
 	}
 
-	return traces, nil
+	return &traces, nil
 }
 
 func createParentSpan(scopeSpans ptrace.ScopeSpans, steps []*github.TaskStep, job *github.WorkflowJob, traceID pcommon.TraceID, logger *zap.Logger) pcommon.SpanID {
@@ -111,14 +111,6 @@ func createParentSpan(scopeSpans ptrace.ScopeSpans, steps []*github.TaskStep, jo
 	span.Status().SetMessage(job.GetConclusion())
 
 	return span.SpanID()
-}
-
-func checkDuplicateStepNames(steps []*github.TaskStep) map[string]int {
-	nameCount := make(map[string]int)
-	for _, step := range steps {
-		nameCount[step.GetName()]++
-	}
-	return nameCount
 }
 
 func convertPRURL(apiURL string) string {
@@ -172,7 +164,7 @@ func createRootSpan(resourceSpans ptrace.ResourceSpans, event *github.WorkflowRu
 	return rootSpanID, nil
 }
 
-func createSpan(scopeSpans ptrace.ScopeSpans, step *github.TaskStep, job *github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger, stepNumber ...int) pcommon.SpanID {
+func createSpan(scopeSpans ptrace.ScopeSpans, step *github.TaskStep, job *github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger, stepNumber int) pcommon.SpanID {
 	logger.Debug("Processing span", zap.String("step_name", step.GetName()))
 	span := scopeSpans.Spans().AppendEmpty()
 	span.SetTraceID(traceID)
@@ -183,13 +175,8 @@ func createSpan(scopeSpans ptrace.ScopeSpans, step *github.TaskStep, job *github
 	span.Attributes().PutStr("ci.github.workflow.job.step.name", step.GetName())
 	span.Attributes().PutStr("ci.github.workflow.job.step.status", step.GetStatus())
 	span.Attributes().PutStr("ci.github.workflow.job.step.conclusion", step.GetConclusion())
-	if len(stepNumber) > 0 && stepNumber[0] > 0 {
-		spanID, _ = generateStepSpanID(job.GetRunID(), int(job.GetRunAttempt()), job.GetName(), step.GetName(), stepNumber[0])
-		span.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber[0]))
-	} else {
-		spanID, _ = generateStepSpanID(job.GetRunID(), int(job.GetRunAttempt()), job.GetName(), step.GetName())
-		span.Attributes().PutInt("ci.github.workflow.job.step.number", step.GetNumber())
-	}
+	spanID, _ = generateStepSpanID(job.GetRunID(), int(job.GetRunAttempt()), job.GetName(), stepNumber)
+	span.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber))
 	span.Attributes().PutStr("ci.github.workflow.job.step.started_at", step.GetStartedAt().Format(time.RFC3339))
 	span.Attributes().PutStr("ci.github.workflow.job.step.completed_at", step.GetCompletedAt().Format(time.RFC3339))
 
@@ -263,13 +250,9 @@ func generateServiceName(config *Config, fullName string) string {
 	return fmt.Sprintf("%s%s%s", config.ServiceNamePrefix, formattedName, config.ServiceNameSuffix)
 }
 
-func generateStepSpanID(runID int64, runAttempt int, jobName, stepName string, stepNumber ...int) (pcommon.SpanID, error) {
+func generateStepSpanID(runID int64, runAttempt int, jobName string, stepNumber int) (pcommon.SpanID, error) {
 	var input string
-	if len(stepNumber) > 0 && stepNumber[0] > 0 {
-		input = fmt.Sprintf("%d%d%s%s%d", runID, runAttempt, jobName, stepName, stepNumber[0])
-	} else {
-		input = fmt.Sprintf("%d%d%s%s", runID, runAttempt, jobName, stepName)
-	}
+	input = fmt.Sprintf("%d%d%s%d", runID, runAttempt, jobName, stepNumber)
 	hash := sha256.Sum256([]byte(input))
 	spanIDHex := hex.EncodeToString(hash[:])
 
@@ -283,13 +266,8 @@ func generateStepSpanID(runID int64, runAttempt int, jobName, stepName string, s
 }
 
 func processSteps(scopeSpans ptrace.ScopeSpans, steps []*github.TaskStep, job *github.WorkflowJob, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, logger *zap.Logger) {
-	nameCount := checkDuplicateStepNames(steps)
-	for index, step := range steps {
-		if nameCount[step.GetName()] > 1 {
-			createSpan(scopeSpans, step, job, traceID, parentSpanID, logger, index+1) // Pass step number if duplicate names exist
-		} else {
-			createSpan(scopeSpans, step, job, traceID, parentSpanID, logger)
-		}
+	for _, step := range steps {
+		createSpan(scopeSpans, step, job, traceID, parentSpanID, logger, int(step.GetNumber())) // Pass step number if duplicate names exist
 	}
 }
 
