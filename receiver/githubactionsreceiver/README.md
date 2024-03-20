@@ -31,7 +31,11 @@ The following settings are optional:
 
 * `path` (default: '/events'): Path where the receiver instance will accept events 
 * `secret`: GitHub webhook hash signature
-* `token`: GitHub personal access token for fetching logs
+* `ghauth`: GitHub API authentication details used to retireve workflows logs (can be omitted if no log pipeline is configured for the receiver)
+  * `token`: GitHub personal access token. Must be empty if any of the following is set
+  * `app_id` GitHub App ID
+  * `installation_id` GitHub App Installation ID
+  * `private_key_path` Path to the GitHub App private key file
 
 Example:
 ```yaml
@@ -40,9 +44,34 @@ receivers:
         endpoint: localhost:19418
         path: /events
         secret: It's a Secret to Everybody
-        token: This is also a Secret to Everybody
+        ghauth: 
+            app_id: 123
+            installation_id: 456
+            private_key_path: /path/to/key.pem
 ```
 The full list of settings exposed for this receiver are documented [here](./config.go) with a detailed sample configuration [here](./testdata/config.yaml)
+
+### GitHub API Authentication
+
+The receiver requires GitHub API authentication to fetch logs for workflows. The authentication method can be either a Fine-grained personal access token (Beta) or a GitHub App. The receiver supports both methods, but only one can be used at a time.
+
+GitHub apps are recommended as they have higher rate limits and are more secure. To use a GitHub App, you need to create a GitHub App and install it on your repository.
+
+#### Fine-grained Personal Access Token
+
+> [!WARNING] 
+> Personal Access Tokens are not recommended. They have lower rate limits and are less secure than GitHub Apps. Use a GitHub App for production deployments.
+
+To create a Fine-graned personal access token (Beta):
+
+1. On **GitHub.com**, navigate to [Settings -> Developer settings -> Personal access tokens -> Fine-grained tokens](https://github.com/settings/tokens?type=beta)
+2. Click **Generate new token**.
+3. Select a name and an expiration date for the token.
+4. Under **Repository access**, select either **All repositories** or **Only select repositories** and select the repositories you want to access.
+5. Under **Permissions -> Repository permissions**, set **Actions** to **Read-only**.
+6. Click **Generate token**.
+
+Use the generated token as the `ghauth.token` in the receiver configuration.
 
 ## Advanced Configuration
 
@@ -77,21 +106,13 @@ receivers:
     service_name_suffix: "-bar" # Appended to the default service name (ignored if custom_service_name is set)
 ```
 
-## GitHub repository webhooks
+## GitHub webhooks
 
-Webhooks provide a way for notifications to be delivered to an external web server whenever certain events occur on GitHub.
+Webhooks provide a way for notifications to be delivered to an external web server whenever certain events occur on GitHub. 
 
-### Delivery headers
+### Subscribing to webhooks
 
-HTTP POST payloads that are delivered to your webhook's configured URL endpoint will contain several special headers:
-
-* `X-Hub-Signature`: This header is sent if the webhook is configured with a `secret`. This is the HMAC hex digest of the request body, and is generated using the SHA-1 hash function and the `secret` as the HMAC `key`. `X-Hub-Signature` is provided for compatibility with existing integrations. It's recommended that you use the more secure `X-Hub-Signature-256` instead.
-* `X-Hub-Signature-256`: This header is sent if the webhook is configured with a `secret` (recommended). This is the HMAC hex digest of the request body, and is generated using the SHA-256 hash function and the `secret` as the HMAC `key`.
-* `User-Agent`: This header will always have the prefix `GitHub-Hookshot/`.
-
-### Creating webhooks
-
-You can create webhooks to subscribe to specific events that occur on GitHub.
+You can either [create a webhook for a specific repository](#creating-a-repository-webhook) or subscribe to events [via a GitHub App](#subscribing-via-a-github-app). The latter is recommended if you are configuring the receiver to use a GitHub App for authentication.
 
 #### Creating a respositoty webhook
 
@@ -117,8 +138,75 @@ You can use the GitHub web interface or the REST API to create a repository webh
 
 Alternatively you can use a configuration management tool such as [`terraform`](https://www.terraform.io/) with the [`github_repository_webhook`](https://registry.terraform.io/providers/integrations/github/latest/docs/resources/repository_webhook.html) resource, to configure webhooks.
 
+#### Subscribing via a GitHub App
 
-### Deterministic IDs
+If you configure the receiver to use a GitHub App for authentication, you can subscribe to events via the GitHub App. This allows you to receive events from all repositories that have installed the GitHub App.
+
+##### Creating a GitHub App
+
+1. On **GitHub.com**, navigate to [Settings -> Developer Settings -> GitHub Apps](https://github.com/settings/apps)
+2. Click **New GitHub App**.
+3. Choose a name for your app, and enter an Homepage URL.
+4. Uncheck **Expire user authorization tokens**, which is checked by default.
+5. Under **Webhook**, make sure **Active** is checked.
+6. Under **Webhook URL**, type the URL where you'd like to receive payloads.
+7. Optionally (recomended), under **Webhook secret (optional)**, type a string to use as a secret key. You should choose a random string of text with high entropy. You can use the webhook secret to limit incoming requests to only those originating from GitHub.
+8. Under **Permissions -> Repository permissions**, set **Actions** to **Read-only**.
+9. Under **Subscribe to events**, select **Workflow job** and **Workflow run**.
+10. Select where the github can be installed.
+11. Click **Create GitHub App**.
+12. Once the app is created, you will be taken to the app's settings page. Take note of the **App ID** shown at the top of the page.
+13. Near the bottom of the page, click **Generate a private key** and save the private key file.
+
+##### Installing the GitHub App
+
+After creating the GitHub App, you can install it on your repository.
+
+1. On **GitHub.com**, navigate to [Settings -> Developer Settings -> GitHub Apps](https://github.com/settings/apps) and click **Edit** next to the GitHub App you created.
+2. On the left sidebar, click **Install App**.
+3. Click **Install** next to the account you want to install the GitHub App on.
+4. Select on which repositories you want to install the GitHub App on.
+5. Click **Install**.
+6. Navigate back to the GitHub App settings page.
+7. On the left sidebar, click **Advanced**.
+8. Under **Recent deliveries**, expand a delivery and take note of the **Installation ID** as shown in the payload.
+
+##### Configure the Receiver to use the GitHub App
+
+When configuring the receiver, you will need to provide the **App ID** and **Installation ID** for the GitHub App. You will also need to provide the path to the private key file.
+
+example:
+
+```yaml
+receivers:
+    githubactions:
+        # [...] other settings
+        ghauth: 
+            app_id: 1
+            installation_id: 234
+            private_key_path: /path/to/key.pem
+
+```
+
+> [!IMPORTANT]
+> Each time you install the GitHub App on a repository, a new installation ID is generated. When configuring the receiver, you will need to provide the installation ID for the repository you want to receive events from. You can create multiple instances of the receiver, each with a different installation ID, to receive events from multiple installations.
+> ```yaml
+> receivers:
+>     githubactions/one:
+>         # [...] other settings
+>         ghauth:
+>             app_id: 1
+>             installation_id: 234
+>             private_key_path: /path/to/key.pem
+>     githubactions/two:
+>         # [...] other settings
+>         ghauth:
+>             app_id: 1
+>             installation_id: 789
+>             private_key_path: /path/to/key.pem
+> ```
+
+## Deterministic IDs
 
 The GitHub Actions Receiver generates deterministic IDs to ensure traceability and consistency across emitted spans. Here’s how the IDs are generated:
 
@@ -128,11 +216,11 @@ The GitHub Actions Receiver generates deterministic IDs to ensure traceability a
 
 These IDs allow for the correlation of telemetry data within the observability platform, enabling users to link their own spans to those emitted by the receiver.
 
-#### Generating IDs
+### Generating IDs
 
 Below are example functions in a couple of langues for generating each ID, replicating the logic used by the receiver:
 
-##### Generating IDs in `bash`
+#### Generating IDs in `bash`
 
 ```bash
 generate_trace_id() {
@@ -165,7 +253,7 @@ echo "Parent Span ID: ${parent_span_id:0:16}"
 echo "Span ID: ${span_id:0:16}"
 ```
 
-##### Generating IDs in `python`
+#### Generating IDs in `python`
 
 ```python
 import hashlib
@@ -196,6 +284,6 @@ print("Parent Span ID:", parent_span_id)
 print("Span ID:", span_id)
 ```
 
-##### Generating IDs in Other Languages
+#### Generating IDs in Other Languages
 
 You can adapt the logic shown in the bash examples to any programming language that supports SHA-256 hashing. The key is to ensure the input string format matches between your code and the receiver for consistent ID generation.

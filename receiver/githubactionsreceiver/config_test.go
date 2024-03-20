@@ -43,6 +43,60 @@ func TestValidateConfig(t *testing.T) {
 				Secret: "mysecret",
 			},
 		},
+		{
+			desc:   "Auth method",
+			expect: errAuthMethod,
+			conf: Config{
+				ServerConfig: confighttp.ServerConfig{
+					Endpoint: "localhost:8080",
+				},
+				AuthConfig: AuthConfig{
+					AppID:          1,
+					InstallationID: 1,
+					PrivateKeyPath: "path",
+					Token:          "token",
+				},
+			},
+		},
+		{
+			desc:   "GH App Auth > Missing App ID",
+			expect: errMissingAppID,
+			conf: Config{
+				ServerConfig: confighttp.ServerConfig{
+					Endpoint: "localhost:8080",
+				},
+				AuthConfig: AuthConfig{
+					InstallationID: 1,
+					PrivateKeyPath: "path",
+				},
+			},
+		},
+		{
+			desc:   "GH App Auth > Missing Installation ID",
+			expect: errMissingInstallationID,
+			conf: Config{
+				ServerConfig: confighttp.ServerConfig{
+					Endpoint: "localhost:8080",
+				},
+				AuthConfig: AuthConfig{
+					AppID:          1,
+					PrivateKeyPath: "path",
+				},
+			},
+		},
+		{
+			desc:   "GH App Auth > Missing Private Key Path",
+			expect: errMissingPrivateKeyPath,
+			conf: Config{
+				ServerConfig: confighttp.ServerConfig{
+					Endpoint: "localhost:8080",
+				},
+				AuthConfig: AuthConfig{
+					AppID:          1,
+					InstallationID: 1,
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -50,7 +104,6 @@ func TestValidateConfig(t *testing.T) {
 			err := test.conf.Validate()
 			if test.expect == nil {
 				require.NoError(t, err)
-				require.Equal(t, "mysecret", test.conf.Secret)
 			} else {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), test.expect.Error())

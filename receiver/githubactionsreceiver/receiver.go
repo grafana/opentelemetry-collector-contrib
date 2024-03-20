@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v60/github"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -56,9 +57,19 @@ func newReceiver(
 		return nil, err
 	}
 
-	var client *github.Client
-	if config.Token != "" {
-		client = github.NewClient(nil).WithAuthToken(config.Token)
+	var client = github.NewClient(nil)
+
+	if config.AuthConfig.AppID != 0 && config.AuthConfig.InstallationID != 0 && config.AuthConfig.PrivateKeyPath != "" {
+		itr, err := ghinstallation.NewKeyFromFile(http.DefaultTransport, config.AuthConfig.AppID, config.AuthConfig.InstallationID, config.AuthConfig.PrivateKeyPath)
+		if err != nil {
+			return nil, err
+		}
+
+		client = github.NewClient(&http.Client{Transport: itr})
+	}
+
+	if config.AuthConfig.Token != "" {
+		client = github.NewClient(nil).WithAuthToken(config.AuthConfig.Token)
 	}
 
 	gar := &githubActionsReceiver{
