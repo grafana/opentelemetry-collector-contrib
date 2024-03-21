@@ -57,19 +57,27 @@ func newReceiver(
 		return nil, err
 	}
 
-	var client = github.NewClient(nil)
-
-	if config.AuthConfig.AppID != 0 && config.AuthConfig.InstallationID != 0 && config.AuthConfig.PrivateKeyPath != "" {
-		itr, err := ghinstallation.NewKeyFromFile(http.DefaultTransport, config.AuthConfig.AppID, config.AuthConfig.InstallationID, config.AuthConfig.PrivateKeyPath)
+	var ghClient *github.Client
+	var httpClient *http.Client
+	if config.GitHubAPIConfig.Auth.AppID != 0 && config.GitHubAPIConfig.Auth.InstallationID != 0 && config.GitHubAPIConfig.Auth.PrivateKeyPath != "" {
+		itr, err := ghinstallation.NewKeyFromFile(http.DefaultTransport, config.GitHubAPIConfig.Auth.AppID, config.GitHubAPIConfig.Auth.InstallationID, config.GitHubAPIConfig.Auth.PrivateKeyPath)
 		if err != nil {
 			return nil, err
 		}
 
-		client = github.NewClient(&http.Client{Transport: itr})
+		httpClient = &http.Client{Transport: itr}
+	}
+	ghClient = github.NewClient(httpClient)
+
+	if config.GitHubAPIConfig.Auth.Token != "" {
+		ghClient = ghClient.WithAuthToken(config.GitHubAPIConfig.Auth.Token)
 	}
 
-	if config.AuthConfig.Token != "" {
-		client = github.NewClient(nil).WithAuthToken(config.AuthConfig.Token)
+	if config.GitHubAPIConfig.BaseURL != "" && config.GitHubAPIConfig.UploadURL != "" {
+		ghClient, err = ghClient.WithEnterpriseURLs(config.GitHubAPIConfig.BaseURL, config.GitHubAPIConfig.UploadURL)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	gar := &githubActionsReceiver{
@@ -77,7 +85,7 @@ func newReceiver(
 		createSettings: params,
 		logger:         params.Logger,
 		obsrecv:        obsrecv,
-		ghClient:       client,
+		ghClient:       ghClient,
 	}
 
 	return gar, nil

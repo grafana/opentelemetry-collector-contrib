@@ -33,11 +33,14 @@ The following settings are optional:
 
 - `path` (default: '/events'): Path where the receiver instance will accept events
 - `secret`: GitHub webhook hash signature
-- `ghauth`: GitHub API authentication details used to retireve workflows logs (can be omitted if no log pipeline is configured for the receiver)
-  - `token`: GitHub personal access token. Must be empty if any of the following is set
-  - `app_id` GitHub App ID
-  - `installation_id` GitHub App Installation ID
-  - `private_key_path` Path to the GitHub App private key file
+- `gh_api`: GitHub API configuration details used to retireve workflows logs (can be omitted if no log pipeline is configured for the receiver)
+  - `base_url`: GitHub Enterprise base URL. Can be omitted if using GitHub.com
+  - `upload_url`: GitHub Enterprise upload URL. Can be omitted if using GitHub.com
+  - `auth`: GitHub API authentication details
+    - `token`: GitHub personal access token. Must be empty if any of the following is set
+    - `app_id` GitHub App ID
+    - `installation_id` GitHub App Installation ID
+    - `private_key_path` Path to the GitHub App private key file
 
 Example:
 
@@ -47,10 +50,11 @@ receivers:
     endpoint: localhost:19418
     path: /events
     secret: It's a Secret to Everybody
-    ghauth:
-      app_id: 123
-      installation_id: 456
-      private_key_path: /path/to/key.pem
+    gh_api:
+      auth:
+        app_id: 123
+        installation_id: 456
+        private_key_path: /path/to/key.pem
 ```
 
 The full list of settings exposed for this receiver are documented [here](./config.go) with a detailed sample configuration [here](./testdata/config.yaml)
@@ -185,10 +189,11 @@ example:
 receivers:
   githubactions:
     # [...] other settings
-    ghauth:
-      app_id: 1
-      installation_id: 234
-      private_key_path: /path/to/key.pem
+    gh_api:
+      auth:
+        app_id: 1
+        installation_id: 234
+        private_key_path: /path/to/key.pem
 ```
 
 > [!IMPORTANT]
@@ -198,16 +203,18 @@ receivers:
 > receivers:
 >   githubactions/one:
 >     # [...] other settings
->     ghauth:
->       app_id: 1
->       installation_id: 234
->       private_key_path: /path/to/key.pem
+>     gh_api:
+>       auth:
+>         app_id: 1
+>         installation_id: 234
+>         private_key_path: /path/to/key.pem
 >   githubactions/two:
 >     # [...] other settings
->     ghauth:
->       app_id: 1
->       installation_id: 789
->       private_key_path: /path/to/key.pem
+>     gh_api:
+>       auth:
+>         app_id: 1
+>         installation_id: 789
+>         private_key_path: /path/to/key.pem
 > ```
 
 ## Deterministic IDs
