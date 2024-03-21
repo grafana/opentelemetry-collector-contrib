@@ -50,11 +50,13 @@ func TestValidateConfig(t *testing.T) {
 				ServerConfig: confighttp.ServerConfig{
 					Endpoint: "localhost:8080",
 				},
-				AuthConfig: AuthConfig{
-					AppID:          1,
-					InstallationID: 1,
-					PrivateKeyPath: "path",
-					Token:          "token",
+				GitHubAPIConfig: GitHubAPIConfig{
+					Auth: GitHubAPIAuthConfig{
+						AppID:          1,
+						InstallationID: 1,
+						PrivateKeyPath: "path",
+						Token:          "token",
+					},
 				},
 			},
 		},
@@ -65,9 +67,11 @@ func TestValidateConfig(t *testing.T) {
 				ServerConfig: confighttp.ServerConfig{
 					Endpoint: "localhost:8080",
 				},
-				AuthConfig: AuthConfig{
-					InstallationID: 1,
-					PrivateKeyPath: "path",
+				GitHubAPIConfig: GitHubAPIConfig{
+					Auth: GitHubAPIAuthConfig{
+						InstallationID: 1,
+						PrivateKeyPath: "path",
+					},
 				},
 			},
 		},
@@ -78,9 +82,11 @@ func TestValidateConfig(t *testing.T) {
 				ServerConfig: confighttp.ServerConfig{
 					Endpoint: "localhost:8080",
 				},
-				AuthConfig: AuthConfig{
-					AppID:          1,
-					PrivateKeyPath: "path",
+				GitHubAPIConfig: GitHubAPIConfig{
+					Auth: GitHubAPIAuthConfig{
+						AppID:          1,
+						PrivateKeyPath: "path",
+					},
 				},
 			},
 		},
@@ -91,9 +97,35 @@ func TestValidateConfig(t *testing.T) {
 				ServerConfig: confighttp.ServerConfig{
 					Endpoint: "localhost:8080",
 				},
-				AuthConfig: AuthConfig{
-					AppID:          1,
-					InstallationID: 1,
+				GitHubAPIConfig: GitHubAPIConfig{
+					Auth: GitHubAPIAuthConfig{
+						AppID:          1,
+						InstallationID: 1,
+					},
+				},
+			},
+		},
+		{
+			desc:   "GH App Auth > Both BaseURL and UploadURL must be set if one is set > Missing BaseURL",
+			expect: errBaseURLAndUploadURL,
+			conf: Config{
+				ServerConfig: confighttp.ServerConfig{
+					Endpoint: "localhost:8080",
+				},
+				GitHubAPIConfig: GitHubAPIConfig{
+					UploadURL: "upload",
+				},
+			},
+		},
+		{
+			desc:   "GH App Auth > Both BaseURL and UploadURL must be set if one is set > Missing UploadURL",
+			expect: errBaseURLAndUploadURL,
+			conf: Config{
+				ServerConfig: confighttp.ServerConfig{
+					Endpoint: "localhost:8080",
+				},
+				GitHubAPIConfig: GitHubAPIConfig{
+					BaseURL: "base",
 				},
 			},
 		},
