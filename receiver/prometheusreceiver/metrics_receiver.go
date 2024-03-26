@@ -18,9 +18,11 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/mitchellh/hashstructure/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	commonconfig "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
+	promconfig "github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
 	promHTTP "github.com/prometheus/prometheus/discovery/http"
 	"github.com/prometheus/prometheus/scrape"
@@ -73,7 +75,11 @@ func (r *pReceiver) Start(_ context.Context, _ component.Host) error {
 	logger := internal.NewZapToGokitLogAdapter(r.settings.Logger)
 
 	// add scrape configs defined by the collector configs
-	baseCfg := r.cfg.PrometheusConfig
+	// set the new default added in prom v0.51.0 correctly
+	baseCfg := *r.cfg.PrometheusConfig
+	if baseCfg.GlobalConfig.ScrapeProtocols == nil {
+		baseCfg.GlobalConfig.ScrapeProtocols = promconfig.DefaultScrapeProtocols
+	}
 
 	err := r.initPrometheusComponents(discoveryCtx, logger)
 	if err != nil {
@@ -81,7 +87,7 @@ func (r *pReceiver) Start(_ context.Context, _ component.Host) error {
 		return err
 	}
 
-	err = r.applyCfg(baseCfg)
+	err = r.applyCfg(&baseCfg)
 	if err != nil {
 		r.settings.Logger.Error("Failed to apply new scrape configuration", zap.Error(err))
 		return err
@@ -89,7 +95,7 @@ func (r *pReceiver) Start(_ context.Context, _ component.Host) error {
 
 	allocConf := r.cfg.TargetAllocator
 	if allocConf != nil {
-		err = r.startTargetAllocator(allocConf, baseCfg)
+		err = r.startTargetAllocator(allocConf, &baseCfg)
 		if err != nil {
 			return err
 		}
@@ -234,7 +240,13 @@ func (r *pReceiver) applyCfg(cfg *PromConfig) error {
 }
 
 func (r *pReceiver) initPrometheusComponents(ctx context.Context, logger log.Logger) error {
-	r.discoveryManager = discovery.NewManager(ctx, logger)
+	reg := prometheus.NewRegistry()
+	sdMetrics, err := discovery.CreateAndRegisterSDMetrics(reg)
+	if err != nil {
+		return err
+	}
+
+	r.discoveryManager = discovery.NewManager(ctx, logger, reg, sdMetrics)
 
 	go func() {
 		r.settings.Logger.Info("Starting discovery manager")
@@ -267,14 +279,17 @@ func (r *pReceiver) initPrometheusComponents(ctx context.Context, logger log.Log
 		return err
 	}
 
-	r.scrapeManager = scrape.NewManager(&scrape.Options{
-		PassMetadataInContext:     true,
-		EnableProtobufNegotiation: r.cfg.EnableProtobufNegotiation,
-		ExtraMetrics:              r.cfg.ReportExtraScrapeMetrics,
+	opts := &scrape.Options{
+		PassMetadataInContext: true,
+		ExtraMetrics:          r.cfg.ReportExtraScrapeMetrics,
 		HTTPClientOptions: []commonconfig.HTTPClientOption{
 			commonconfig.WithUserAgent(r.settings.BuildInfo.Command + "/" + r.settings.BuildInfo.Version),
 		},
-	}, logger, store)
+	}
+	r.scrapeManager, err = scrape.NewManager(opts, logger, store, reg)
+	if err != nil {
+		return err
+	}
 
 	go func() {
 		// The scrape manager needs to wait for the configuration to be loaded before beginning

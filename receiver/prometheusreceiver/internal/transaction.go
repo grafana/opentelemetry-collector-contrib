@@ -208,6 +208,11 @@ func (t *transaction) AppendHistogram(_ storage.SeriesRef, _ labels.Labels, _ in
 	return 0, nil
 }
 
+func (t *transaction) AppendCTZeroSample(ref storage.SeriesRef, l labels.Labels, ts, ct int64) (storage.SeriesRef, error) {
+	//TODO: implement this func
+	return 0, nil
+}
+
 func (t *transaction) getSeriesRef(ls labels.Labels, mtype pmetric.MetricType) uint64 {
 	var hash uint64
 	hash, t.bufBytes = getSeriesRef(t.bufBytes, ls, mtype)

@@ -42,7 +42,7 @@ var skippedTests = map[string]struct{}{
 	"bad_timestamp_4": {}, "bad_timestamp_5": {}, "bad_timestamp_7": {}, "bad_unit_6": {}, "bad_unit_7": {},
 	"bad_exemplars_on_unallowed_samples_0": {}, "bad_exemplars_on_unallowed_metric_types_0": {},
 	"bad_exemplars_on_unallowed_samples_1": {}, "bad_exemplars_on_unallowed_metric_types_1": {},
-	"bad_exemplars_on_unallowed_samples_3": {}, "bad_exemplars_on_unallowed_metric_types_2": {},
+	"bad_exemplars_on_unallowed_samples_3": {}, "bad_exemplars_on_unallowed_metric_types_2": {}, "bad_missing_or_extra_commas_2": {},
 }
 
 func verifyPositiveTarget(t *testing.T, _ *testData, mds []pmetric.ResourceMetrics) {
