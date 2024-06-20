@@ -255,7 +255,7 @@ func getHistogramBounds(histIndex int) (float64, float64) {
 	return histogramLowerBound(histIndex), histogramLowerBound(histIndex + 1)
 }
 
-// This equation for finding the lower bound of the exponential histogram bucket
+// This equation finds the lower bound of the exponential histogram bucket
 // Based on: https://github.com/open-telemetry/opentelemetry-go/blob/3a72c5ea94bf843beeaa044b0dda2ce4d627bb7b/sdk/metric/internal/aggregate/exponential_histogram.go#L122
 // See also: https://github.com/open-telemetry/opentelemetry-go/blob/3a72c5ea94bf843beeaa044b0dda2ce4d627bb7b/sdk/metric/internal/aggregate/exponential_histogram.go#L139
 func histogramLowerBound(histIndex int) float64 {
