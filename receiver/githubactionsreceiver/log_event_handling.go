@@ -86,49 +86,66 @@ func eventToLogs(event interface{}, config *Config, ghClient *github.Client, log
 			jobLogsScope.Scope().Attributes().PutStr("ci.github.workflow.job.name", jobName)
 
 			for _, logFile := range files {
+				if !strings.HasPrefix(logFile.Name, jobName) {
+					continue
+				}
 
-				if strings.HasPrefix(logFile.Name, jobName) {
-					fileNameWithoutDir := strings.Replace(logFile.Name, jobName+"/", "", 1)
-					stepNumber, _ := strconv.Atoi(strings.Split(fileNameWithoutDir, "_")[0])
+				fileNameWithoutDir := strings.TrimPrefix(logFile.Name, jobName+"/")
+				stepNumberStr := strings.Split(fileNameWithoutDir, "_")[0]
+				stepNumber, err := strconv.Atoi(stepNumberStr)
+				if err != nil {
+					logger.Error("Invalid step number", zap.String("stepNumberStr", stepNumberStr), zap.Error(err))
+					continue
+				}
 
-					spanID, _ := generateStepSpanID(e.GetWorkflowRun().GetID(), e.GetWorkflowRun().GetRunAttempt(), jobName, int64(stepNumber))
+				spanID, err := generateStepSpanID(e.GetWorkflowRun().GetID(), e.GetWorkflowRun().GetRunAttempt(), jobName, int64(stepNumber))
+				if err != nil {
+					logger.Error("Failed to generate span ID", zap.Error(err))
+					continue
+				}
 
-					ff, err := logFile.Open()
+				ff, err := logFile.Open()
+				if err != nil {
+					logger.Error("Failed to open file", zap.Error(err))
+					continue
+				}
+				defer ff.Close()
+
+				scanner := bufio.NewScanner(ff)
+				for scanner.Scan() {
+					lineText := scanner.Text()
+					if lineText == "" {
+						logger.Debug("Skipping empty line")
+						continue
+					}
+
+					ts, line, ok := strings.Cut(lineText, " ")
+					if !ok {
+						logger.Error("Failed to cut log line", zap.String("body", lineText))
+						continue
+					}
+
+					parsedTime, err := time.Parse(time.RFC3339, ts)
 					if err != nil {
-						logger.Error("Failed to open file", zap.Error(err))
-						break
+						logger.Error("Failed to parse timestamp", zap.String("timestamp", ts), zap.Error(err))
+						continue
 					}
 
-					scanner := bufio.NewScanner(ff)
-					for scanner.Scan() {
-						record := jobLogsScope.LogRecords().AppendEmpty()
-
-						if withTraceInfo {
-							record.SetSpanID(spanID)
-							record.SetTraceID(traceID)
-						}
-
-						record.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber))
-
-						now := pcommon.NewTimestampFromTime(time.Now())
-
-						ts, line, _ := strings.Cut(scanner.Text(), " ")
-						parsedTime, _ := time.Parse(time.RFC3339, ts)
-
-						record.SetObservedTimestamp(now)
-						record.SetTimestamp(pcommon.NewTimestampFromTime(parsedTime))
-
-						record.Body().SetStr(line)
+					record := jobLogsScope.LogRecords().AppendEmpty()
+					if withTraceInfo {
+						record.SetSpanID(spanID)
+						record.SetTraceID(traceID)
 					}
-					ff.Close()
+					record.Attributes().PutInt("ci.github.workflow.job.step.number", int64(stepNumber))
+					record.SetTimestamp(pcommon.NewTimestampFromTime(parsedTime))
+					record.SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+					record.Body().SetStr(line)
+				}
 
-					if err := scanner.Err(); err != nil {
-						logger.Error("error reading file", zap.Error(err))
-					}
-
+				if err := scanner.Err(); err != nil {
+					logger.Error("Error reading file", zap.Error(err))
 				}
 			}
-
 		}
 
 		return &logs, nil
