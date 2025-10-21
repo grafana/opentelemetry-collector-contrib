@@ -14,11 +14,12 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// ResourceEventHandlerOptions is a compatibility shim for k8s.io/client-go v0.34.1+
+// Option is a compatibility shim for k8s.io/client-go v0.34.1+
 // This type was added in client-go v0.33+ to support AddEventHandlerWithOptions.
 // For older versions (v0.32.x), we define it here for forward compatibility.
-type ResourceEventHandlerOptions struct {
-	ResyncPeriod time.Duration
+type Option interface {
+	// Apply is a marker method for the option interface
+	Apply(interface{})
 }
 
 type FakeInformer struct {
@@ -51,8 +52,9 @@ func (f *FakeInformer) AddEventHandlerWithResyncPeriod(_ cache.ResourceEventHand
 	return f, nil
 }
 
-func (f *FakeInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ResourceEventHandlerOptions) (cache.ResourceEventHandlerRegistration, error) {
-	return f.AddEventHandlerWithResyncPeriod(handler, opts.ResyncPeriod)
+func (f *FakeInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ...Option) (cache.ResourceEventHandlerRegistration, error) {
+	// For testing purposes, delegate to AddEventHandler
+	return f.AddEventHandler(handler)
 }
 
 func (*FakeInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
@@ -196,8 +198,9 @@ func (f *NoOpInformer) AddEventHandlerWithResyncPeriod(cache.ResourceEventHandle
 	return f, nil
 }
 
-func (f *NoOpInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ResourceEventHandlerOptions) (cache.ResourceEventHandlerRegistration, error) {
-	return f.AddEventHandlerWithResyncPeriod(handler, opts.ResyncPeriod)
+func (f *NoOpInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ...Option) (cache.ResourceEventHandlerRegistration, error) {
+	// No-op for testing, return self as registration
+	return f, nil
 }
 
 func (*NoOpInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
