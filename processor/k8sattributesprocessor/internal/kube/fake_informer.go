@@ -4,6 +4,7 @@
 package kube // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor/internal/kube"
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -12,6 +13,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
+
+// ResourceEventHandlerOptions is a compatibility shim for k8s.io/client-go v0.34.1+
+// This type was added in client-go v0.33+ to support AddEventHandlerWithOptions.
+// For older versions (v0.32.x), we define it here for forward compatibility.
+type ResourceEventHandlerOptions struct {
+	ResyncPeriod time.Duration
+}
 
 type FakeInformer struct {
 	*FakeController
@@ -41,6 +49,10 @@ func (f *FakeInformer) AddEventHandler(handler cache.ResourceEventHandler) (cach
 
 func (f *FakeInformer) AddEventHandlerWithResyncPeriod(_ cache.ResourceEventHandler, _ time.Duration) (cache.ResourceEventHandlerRegistration, error) {
 	return f, nil
+}
+
+func (f *FakeInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ResourceEventHandlerOptions) (cache.ResourceEventHandlerRegistration, error) {
+	return f.AddEventHandlerWithResyncPeriod(handler, opts.ResyncPeriod)
 }
 
 func (*FakeInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
@@ -134,6 +146,13 @@ func (c *FakeController) Run(stopCh <-chan struct{}) {
 	c.Unlock()
 }
 
+func (c *FakeController) RunWithContext(ctx context.Context) {
+	<-ctx.Done()
+	c.Lock()
+	c.stopped = true
+	c.Unlock()
+}
+
 func (c *FakeController) HasStopped() bool {
 	c.Lock()
 	defer c.Unlock()
@@ -177,6 +196,10 @@ func (f *NoOpInformer) AddEventHandlerWithResyncPeriod(cache.ResourceEventHandle
 	return f, nil
 }
 
+func (f *NoOpInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ResourceEventHandlerOptions) (cache.ResourceEventHandlerRegistration, error) {
+	return f.AddEventHandlerWithResyncPeriod(handler, opts.ResyncPeriod)
+}
+
 func (*NoOpInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
 	return nil
 }
@@ -200,6 +223,13 @@ type NoOpController struct {
 func (c *NoOpController) Run(stopCh <-chan struct{}) {
 	go func() {
 		<-stopCh
+		c.hasStopped = true
+	}()
+}
+
+func (c *NoOpController) RunWithContext(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
 		c.hasStopped = true
 	}()
 }
