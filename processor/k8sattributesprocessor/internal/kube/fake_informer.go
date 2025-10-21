@@ -14,14 +14,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// Option is a compatibility shim for k8s.io/client-go v0.34.1+
-// This type was added in client-go v0.33+ to support AddEventHandlerWithOptions.
-// For older versions (v0.32.x), we define it here for forward compatibility.
-type Option interface {
-	// Apply is a marker method for the option interface
-	Apply(interface{})
-}
-
 type FakeInformer struct {
 	*FakeController
 
@@ -52,9 +44,12 @@ func (f *FakeInformer) AddEventHandlerWithResyncPeriod(_ cache.ResourceEventHand
 	return f, nil
 }
 
-func (f *FakeInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ...Option) (cache.ResourceEventHandlerRegistration, error) {
-	// For testing purposes, delegate to AddEventHandler
-	return f.AddEventHandler(handler)
+func (f *FakeInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, options cache.HandlerOptions) (cache.ResourceEventHandlerRegistration, error) {
+	resyncPeriod := time.Second
+	if options.ResyncPeriod != nil {
+		resyncPeriod = *options.ResyncPeriod
+	}
+	return f.AddEventHandlerWithResyncPeriod(handler, resyncPeriod)
 }
 
 func (*FakeInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
@@ -169,6 +164,10 @@ func (*FakeInformer) SetWatchErrorHandler(cache.WatchErrorHandler) error {
 	return nil
 }
 
+func (*FakeInformer) SetWatchErrorHandlerWithContext(cache.WatchErrorHandlerWithContext) error {
+	return nil
+}
+
 type NoOpInformer struct {
 	*NoOpController
 }
@@ -198,9 +197,12 @@ func (f *NoOpInformer) AddEventHandlerWithResyncPeriod(cache.ResourceEventHandle
 	return f, nil
 }
 
-func (f *NoOpInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, opts ...Option) (cache.ResourceEventHandlerRegistration, error) {
-	// No-op for testing, return self as registration
-	return f, nil
+func (f *NoOpInformer) AddEventHandlerWithOptions(handler cache.ResourceEventHandler, options cache.HandlerOptions) (cache.ResourceEventHandlerRegistration, error) {
+	resyncPeriod := time.Second
+	if options.ResyncPeriod != nil {
+		resyncPeriod = *options.ResyncPeriod
+	}
+	return f.AddEventHandlerWithResyncPeriod(handler, resyncPeriod)
 }
 
 func (*NoOpInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
@@ -247,6 +249,14 @@ func (*NoOpController) HasSynced() bool {
 
 func (*NoOpController) LastSyncResourceVersion() string {
 	return ""
+}
+
+func (*NoOpInformer) SetWatchErrorHandler(cache.WatchErrorHandler) error {
+	return nil
+}
+
+func (*NoOpInformer) SetWatchErrorHandlerWithContext(cache.WatchErrorHandlerWithContext) error {
+	return nil
 }
 
 func (*NoOpController) SetWatchErrorHandler(cache.WatchErrorHandler) error {
