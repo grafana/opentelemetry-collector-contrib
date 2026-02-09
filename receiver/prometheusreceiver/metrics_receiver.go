@@ -33,6 +33,7 @@ import (
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/util/features"
 	"github.com/prometheus/prometheus/util/httputil"
 	"github.com/prometheus/prometheus/web"
 	api_v1 "github.com/prometheus/prometheus/web/api/v1"
@@ -227,7 +228,7 @@ func (r *pReceiver) initScrapeOptions() *scrape.Options {
 		HTTPClientOptions: []commonconfig.HTTPClientOption{
 			commonconfig.WithUserAgent(r.settings.BuildInfo.Command + "/" + r.settings.BuildInfo.Version),
 		},
-		EnableCreatedTimestampZeroIngestion: enableCreatedTimestampZeroIngestionGate.IsEnabled(),
+		EnableStartTimestampZeroIngestion: enableCreatedTimestampZeroIngestionGate.IsEnabled(),
 	}
 
 	return opts
@@ -275,7 +276,8 @@ func (r *pReceiver) initAPIServer(ctx context.Context, host component.Host) erro
 		IsAgent:        true,
 		Registerer:     r.registerer,
 		Gatherer:       r.registry,
-		CORSOrigin:     corsOriginRegexp,
+		CORSOrigin:            corsOriginRegexp,
+		STZeroIngestionEnabled: enableCreatedTimestampZeroIngestionGate.IsEnabled(),
 	}
 
 	// Creates the API object in the same way as the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L314-L354
@@ -343,11 +345,12 @@ func (r *pReceiver) initAPIServer(ctx context.Context, host component.Host) erro
 		o.EnableOTLPWriteReceiver,
 		o.ConvertOTLPDelta,
 		o.NativeOTLPDeltaIngestion,
-		o.CTZeroIngestionEnabled,
+		o.STZeroIngestionEnabled,
 		5*time.Minute, // LookbackDelta - Using the default value of 5 minutes
 		o.EnableTypeAndUnitLabels,
 		false, // appendMetadata from remote write
 		nil,   // OverrideErrorCode
+		features.NewRegistry(), // featureRegistry for /api/v1/features
 	)
 
 	// Create listener and monitor with conntrack in the same way as the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L564-L579
